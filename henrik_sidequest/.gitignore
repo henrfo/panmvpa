@@ -1,3 +1,10 @@
 # Fetched dataset (datalad clone) and GLM outputs — never track
 data/
 derivatives/
+.venv/
+__pycache__/
+*.pyc
+
+# ...but DO track the committed template atlases (small, ~3MB)
+!atlases/
+!atlases/**
