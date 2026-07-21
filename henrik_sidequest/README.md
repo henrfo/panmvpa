@@ -22,15 +22,52 @@ ev = panmvpa.build_events("PAN01", 1)  # onset / duration(=10s) / trial_type
 img = panmvpa.load_bold("PAN01", 1)    # nibabel image, MNI152NLin6Asym 2mm
 ```
 
+## The study
+
+How much resting-state data do you need before an *individualised* brain map actually
+helps classify what task someone is doing? Two curves, one figure, shared x-axis =
+minutes of rest used to build the parcellation.
+
+- **Plot 1 — DN-A reliability.** At each data level, split the rest in half, build a
+  parcellation from each half, Dice-overlap the two DN-A masks.
+- **Plot 2 — task decoding.** At each data level, build one parcellation, use its DN-A
+  mask to select voxels, and classify which of 4 tasks is being performed
+  (language / theory-of-mind / episodic projection / cognitive control), chance = 25%.
+
+### Method
+
+The **group Yeo-17 atlas is a fixed anchor**. Schaefer-400 (whose parcels carry the
+Yeo-Krienen 17-network labels, already in FSL-MNI152 2mm) is resampled once
+(nearest-neighbour) to the BOLD grid and collapsed to 17 network *seed regions*. Those
+region definitions never change with data amount and are never re-derived from the
+individual. At each level the 17 reference signals are the mean timeseries within those
+fixed regions computed from that level's rest data, and every cortical voxel is reassigned
+by winner-take-all to its most-correlated reference. Only voxel allegiance is
+individualised. **DN-A := DefaultC.**
+
 ## Package layout
 
-- `panmvpa/config.py` — paths, `SUBJECTS`, `TASK`, `TR`, `CONDITIONS`, durations, path helpers
+- `panmvpa/config.py` — paths, subjects, TR, durations, minute levels, decoding families
 - `panmvpa/events.py` — `parse_1d_file`, `build_events`, `epiproj_sessions`
 - `panmvpa/bold.py` — `find_bold`, `load_bold`, `is_fetched`
+- `panmvpa/rest.py` — enumerate rest runs, concatenate to a target number of minutes
+- `panmvpa/parcellation.py` — WTA to the fixed group Yeo-17, `dn_a_mask`
+- `panmvpa/reliability.py` — split-half Dice at each data level (Plot 1)
+- `panmvpa/glm.py` — first-level GLM for any task -> task-vs-baseline beta per session
+- `panmvpa/mvpa.py` — 4-class features from the DN-A mask, SVM, leave-one-session-out CV
+- `panmvpa/figure.py` — two-panel figure + CSV
 - `panmvpa/atlases.py` — download Schaefer-400/Yeo-17 into `atlases/`
-- `fetch_data.py` — `datalad get` only the epiproj slice for a subject
-- `verify.py` — smoke test (events table + BOLD shape + atlases)
+- `scripts/run_all.py` — end-to-end: both curves, PNG + CSV
+- `fetch_data.py` / `verify.py` — data fetch + smoke test
 - `atlases/` — template parcellations, committed (~3 MB)
+
+## Running it
+
+```bash
+python scripts/run_all.py --subject PAN01
+```
+
+Multi-subject is a loop over `--subject`; nothing in the pipeline is PAN01-specific.
 
 ## Getting the data
 

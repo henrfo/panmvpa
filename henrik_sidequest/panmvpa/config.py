@@ -25,6 +25,25 @@ SUBJECTS = [f"PAN{n:02d}" for n in range(1, 11)]  # PAN01 .. PAN10
 TR = 1.355  # seconds, from *_bold.json RepetitionTime
 SPACE = "MNI152NLin6Asym_res-2"
 
+# --- Resting state (parcellation input) -----------------------------------
+REST_TASK = "rest"
+# Each PAN rest run is 222 volumes ~= 5.01 min. The reliability/decoding x-axis
+# is minutes of rest; we concatenate whole runs up to each target.
+MINUTE_LEVELS = [20, 40, 60, 80, 100, 120]
+
+# --- Group reference parcellation -----------------------------------------
+# The Yeo-Krienen 17-network taxonomy, realised via Schaefer-400 (its parcels ARE
+# labelled by the 17 networks) in FSL-MNI152 2mm. This is the FIXED group anchor:
+# it defines the 17 seed regions used to derive reference timeseries at every data
+# level. Only voxel allegiance is individualised, never these region definitions.
+SCHAEFER_ATLAS = ATLAS_DIR / "schaefer_2018" / (
+    "Schaefer2018_400Parcels_17Networks_order_FSLMNI152_2mm.nii.gz"
+)
+SCHAEFER_ORDER = ATLAS_DIR / "schaefer_2018" / "Schaefer2018_400Parcels_17Networks_order.txt"
+N_NETWORKS = 17
+# DN-A := Yeo-17 DefaultC (retrosplenial / parahippocampal / dorsal PCC).
+DN_A_NETWORK = "DefaultC"
+
 # --- Episodic Projection task ---------------------------------------------
 TASK = "epiproj"
 
@@ -49,6 +68,29 @@ CONTRASTS = {
     "prospection": ("futureself", "presentself"),   # future vs present self
 }
 
+# --- Task-decoding (Plot 2) -----------------------------------------------
+# 4-class problem: which task is being performed, decoded from the DN-A pattern.
+# Each class beta = mean of its sub-task betas that are present in a session
+# (sub-tasks are averaged when both exist, otherwise the one present is used).
+# Block durations (s) are from the paper's STAR Methods.
+TASK_DURATIONS = {
+    "langlocaud": 18.0,
+    "langlocvis": 18.0,
+    "tomfalse": 15.0,   # 10 s story + 5 s response
+    "tompain": 15.0,
+    "epiproj": 10.0,
+    "msit": 42.0,
+    "spatialwm": 34.0,
+}
+
+# Class label = insertion order (language=0, tom=1, epiproj=2, control=3).
+DECODING_FAMILIES = {
+    "language": ["langlocaud", "langlocvis"],
+    "tom": ["tomfalse", "tompain"],
+    "epiproj": ["epiproj"],
+    "control": ["msit"],
+}
+
 
 # --- Path helpers ----------------------------------------------------------
 def sub_id(subject: str) -> str:
@@ -64,8 +106,24 @@ def bold_path(subject: str, session: int, task: str = TASK) -> Path:
     return DATA_ROOT / f"sub-{sid}" / f"ses-{session}" / "func" / fname
 
 
+def rest_glob(subject: str) -> str:
+    """Glob (relative to DATA_ROOT) matching every preproc rest BOLD run for a subject."""
+    sid = sub_id(subject)
+    return (
+        f"sub-{sid}/ses-*/func/"
+        f"sub-{sid}_ses-*_task-{REST_TASK}_run-*_space-{SPACE}_desc-preproc_bold.nii.gz"
+    )
+
+
 def afni_timing_path(subject: str, session: int, condition: str, task: str = TASK) -> Path:
     """AFNI .1D onset file for one subject/session/condition."""
     sid = sub_id(subject)
     fname = f"sub-{sid}_ses-{session}_task-{task}_{condition}.1D"
     return DATA_ROOT / "derivatives" / "afni_timing" / sid / fname
+
+
+def task_timing_files(subject: str, session: int, task: str) -> list[Path]:
+    """All AFNI .1D condition files for one subject/session/task (any condition)."""
+    sid = sub_id(subject)
+    timing_dir = DATA_ROOT / "derivatives" / "afni_timing" / sid
+    return sorted(timing_dir.glob(f"sub-{sid}_ses-{session}_task-{task}_*.1D"))
