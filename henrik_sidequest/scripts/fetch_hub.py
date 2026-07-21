@@ -64,20 +64,25 @@ def _ses_run(key: str) -> tuple[int, int]:
     return grab("ses-"), grab("run-")
 
 
-def select(subject: str, minutes: float) -> list[tuple[str, int]]:
-    """Timing files + the leading rest runs covering ``minutes`` + all epiproj runs."""
+def select(subject: str, minutes: float, kind: str = "all",
+           max_tasks: int | None = None) -> list[tuple[str, int]]:
+    """Files for one subject.
+
+    ``kind='rest'``  rest runs covering ``minutes`` (+ timing) -- what pass 1 needs.
+    ``kind='task'``  the held-out non-rest scans -- what pass 2 needs.
+    ``kind='all'``   both.
+
+    Splitting by kind is what lets the two passes each hold only one subject's worth of
+    raw data on disk at a time.
+    """
     keys = list_keys(f"{DATASET}/sub-{subject}/")
     keys += list_keys(f"{DATASET}/derivatives/afni_timing/{subject}/")
 
     timing = [(k, s) for k, s in keys if k.endswith(".1D")]
-    rest = sorted(
-        (kv for kv in keys if "_task-rest_" in kv[0] and kv[0].endswith(SPACE)),
-        key=lambda kv: _ses_run(kv[0]),
-    )
-    epiproj = sorted(
-        (kv for kv in keys if "_task-epiproj_" in kv[0] and kv[0].endswith(SPACE)),
-        key=lambda kv: _ses_run(kv[0]),
-    )
+    bold = [kv for kv in keys if kv[0].endswith(SPACE)]
+    rest = sorted((kv for kv in bold if "_task-rest_" in kv[0]), key=lambda kv: _ses_run(kv[0]))
+    tasks = sorted((kv for kv in bold if "_task-rest_" not in kv[0]),
+                   key=lambda kv: (_task_of(kv[0]), _ses_run(kv[0])))
 
     n_needed = int(-(-minutes // RUN_MINUTES))  # ceil
     chosen_rest = rest[:n_needed]
@@ -87,7 +92,34 @@ def select(subject: str, minutes: float) -> list[tuple[str, int]]:
             f"available, wanted {n_needed} for {minutes:.0f} min",
             file=sys.stderr,
         )
-    return timing + chosen_rest + epiproj
+    if max_tasks is not None:
+        tasks = _spread_across_tasks(tasks, max_tasks)
+
+    if kind == "rest":
+        return timing + chosen_rest
+    if kind == "task":
+        return timing + tasks
+    return timing + chosen_rest + tasks
+
+
+def _task_of(key: str) -> str:
+    for part in key.rsplit("/", 1)[-1].split("_"):
+        if part.startswith("task-"):
+            return part[len("task-"):]
+    return "unknown"
+
+
+def _spread_across_tasks(items: list[tuple[str, int]], cap: int) -> list[tuple[str, int]]:
+    """Take up to ``cap`` runs, round-robin across task families so no task dominates."""
+    by_task: dict[str, list[tuple[str, int]]] = {}
+    for kv in items:
+        by_task.setdefault(_task_of(kv[0]), []).append(kv)
+    out: list[tuple[str, int]] = []
+    while len(out) < cap and any(by_task.values()):
+        for t in sorted(by_task):
+            if by_task[t] and len(out) < cap:
+                out.append(by_task[t].pop(0))
+    return out
 
 
 def download(key: str, size: int, dest_root: Path) -> bool:
@@ -112,6 +144,12 @@ def main() -> None:
     ap.add_argument("--subjects", nargs="+", default=SUBJECTS)
     ap.add_argument("--minutes", type=float, default=100.0,
                     help="rest minutes to cover per subject (default 100)")
+    ap.add_argument("--kind", choices=["rest", "task", "all"], default="all",
+                    help="rest = what `--stage maps` needs; task = what `--stage identify` "
+                         "needs. Fetch one kind at a time to keep disk use low.")
+    ap.add_argument("--max-tasks", type=int, default=None,
+                    help="cap held-out task runs per subject, spread across task families "
+                         "(default: all of them)")
     args = ap.parse_args()
 
     dest = Path(args.dest)
@@ -119,8 +157,8 @@ def main() -> None:
     grand_bytes = 0
 
     for subject in args.subjects:
-        print(f"\n=== {subject} ===", flush=True)
-        items = select(subject, args.minutes)
+        print(f"\n=== {subject} ({args.kind}) ===", flush=True)
+        items = select(subject, args.minutes, kind=args.kind, max_tasks=args.max_tasks)
         total = sum(s for _, s in items)
         print(f"  {len(items)} files, {total/1e9:.1f} GB", flush=True)
         got = 0

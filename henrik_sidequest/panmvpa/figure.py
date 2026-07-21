@@ -33,71 +33,94 @@ def _mean_sem(rows: list[list[float]]) -> tuple[np.ndarray, np.ndarray]:
 
 
 def save_group_csv(results: dict, path: Path) -> None:
-    """One row per subject per data level, plus the group mean/SEM rows."""
+    """Per-subject Dice rows, group Dice mean/SEM rows, and the identification curve."""
     minutes = results["minutes"]
+    subs = results["subjects"]
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["subject", "minutes", "dice", "dna_voxels_a", "dna_voxels_b",
-                    "cnr", "mean_z_in", "mean_z_out", "n_dna_voxels", "n_sessions"])
-        for sub, res in results["subjects"].items():
-            for rel, c in zip(res["reliability"], res["cnr"]):
+        w.writerow(["subject", "minutes", "dice", "dice_std", "n_seeds", "spare_runs",
+                    "dna_voxels_a", "dna_voxels_b"])
+        for sub, res in subs.items():
+            for rel in res["reliability"]:
                 w.writerow([sub, rel["minutes"], f"{rel['dice']:.4f}",
-                            rel["n_voxels_a"], rel["n_voxels_b"],
-                            f"{c['cnr']:.4f}", f"{c['mean_in']:.4f}",
-                            f"{c['mean_out']:.4f}", c["n_dna_voxels"], c["n_sessions"]])
+                            f"{rel.get('dice_std', 0.0):.4f}", rel.get("n_seeds", 1),
+                            rel.get("spare_runs", ""),
+                            rel["n_voxels_a"], rel["n_voxels_b"]])
         dice_mean, dice_sem = _mean_sem(
-            [[r["dice"] for r in res["reliability"]] for res in results["subjects"].values()]
-        )
-        cnr_mean, cnr_sem = _mean_sem(
-            [[c["cnr"] for c in res["cnr"]] for res in results["subjects"].values()]
+            [[r["dice"] for r in res["reliability"]] for res in subs.values()]
         )
         for i, m in enumerate(minutes):
-            w.writerow(["GROUP_MEAN", m, f"{dice_mean[i]:.4f}", "", "",
-                        f"{cnr_mean[i]:.4f}", "", "", "", len(results["subjects"])])
-        for i, m in enumerate(minutes):
-            w.writerow(["GROUP_SEM", m, f"{dice_sem[i]:.4f}", "", "",
-                        f"{cnr_sem[i]:.4f}", "", "", "", len(results["subjects"])])
+            w.writerow(["GROUP_MEAN", m, f"{dice_mean[i]:.4f}", f"{dice_sem[i]:.4f}",
+                        len(subs), "", "", ""])
+
+        w.writerow([])
+        w.writerow(["minutes", "identification_accuracy", "accuracy_std",
+                    "accuracy_size_matched", "chance", "n_scans", "n_seeds"])
+        for row in results.get("identification", []):
+            w.writerow([row["minutes"], f"{row['accuracy']:.4f}",
+                        f"{row['accuracy_std']:.4f}",
+                        f"{row['accuracy_size_matched']:.4f}",
+                        f"{results.get('chance', float('nan')):.4f}",
+                        row["n_scans"], row["n_seeds"]])
 
 
 def plot_group(results: dict, path: Path) -> None:
     minutes = np.asarray(results["minutes"], dtype=float)
     subs = results["subjects"]
     dice_rows = [[r["dice"] for r in res["reliability"]] for res in subs.values()]
-    cnr_rows = [[c["cnr"] for c in res["cnr"]] for res in subs.values()]
     dice_mean, dice_sem = _mean_sem(dice_rows)
-    cnr_mean, cnr_sem = _mean_sem(cnr_rows)
     n = len(subs)
+
+    ident = results.get("identification", [])
+    acc = np.array([row["accuracy"] for row in ident], dtype=float)
+    acc_sd = np.array([row["accuracy_std"] for row in ident], dtype=float)
+    acc_sm = np.array([row["accuracy_size_matched"] for row in ident], dtype=float)
+    chance = results.get("chance", float("nan"))
+
+    # Per-subject seed spread, so a noisy subject is distinguishable from a flat effect.
+    dice_sd = [[r.get("dice_std", 0.0) for r in res["reliability"]] for res in subs.values()]
+    n_seeds = results.get("n_seeds", 1)
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7, 6.8), sharex=True)
 
-    for row in dice_rows:
-        ax1.plot(minutes, row, color=DICE_COLOR, alpha=0.18, lw=1)
+    for row, sd in zip(dice_rows, dice_sd):
+        ax1.plot(minutes, row, color=DICE_COLOR, alpha=0.2, lw=1)
+        if n_seeds > 1:
+            ax1.errorbar(minutes, row, yerr=sd, fmt="none", ecolor=DICE_COLOR,
+                         alpha=0.18, elinewidth=1, capsize=2)
     ax1.fill_between(minutes, dice_mean - dice_sem, dice_mean + dice_sem,
-                     color=DICE_COLOR, alpha=0.25, lw=0)
-    ax1.plot(minutes, dice_mean, "o-", color=DICE_COLOR, lw=2,
-             label=f"mean of {n} subjects (±1 SEM)")
+                     color=DICE_COLOR, alpha=0.3, lw=0)
+    ax1.plot(minutes, dice_mean, "o-", color=DICE_COLOR, lw=2.5,
+             label=f"group mean, n={n} (±1 SEM)")
     ax1.set_ylabel("DN-A split-half Dice")
     ax1.set_ylim(0, 1.02)
     ax1.set_title("DN-A parcellation reliability")
     ax1.legend(loc="lower right", fontsize=8, framealpha=0.9)
     ax1.grid(alpha=0.25)
 
-    for row in cnr_rows:
-        ax2.plot(minutes, row, color=CNR_COLOR, alpha=0.18, lw=1)
-    ax2.fill_between(minutes, cnr_mean - cnr_sem, cnr_mean + cnr_sem,
-                     color=CNR_COLOR, alpha=0.25, lw=0)
-    ax2.plot(minutes, cnr_mean, "s-", color=CNR_COLOR, lw=2,
-             label=f"mean of {n} subjects (±1 SEM)")
-    ax2.axhline(0, ls="--", lw=1, color="gray", label="no contrast (0)")
-    ax2.set_ylabel("DN-A contrast-to-noise (Z in − Z out)")
+    if len(acc):
+        ax2.fill_between(minutes, acc - acc_sd, acc + acc_sd,
+                         color=CNR_COLOR, alpha=0.3, lw=0)
+        ax2.plot(minutes, acc, "s-", color=CNR_COLOR, lw=2.5,
+                 label=f"identification accuracy (±1 SD over {n_seeds} seeds)")
+        if np.isfinite(acc_sm).any():
+            ax2.plot(minutes, acc_sm, "^--", color="#7b3294", lw=1.5, alpha=0.85,
+                     label="size-matched control")
+    ax2.axhline(chance, ls="--", lw=1, color="gray", label=f"chance ({chance:.2f})")
+    ax2.set_ylabel("Subject identification accuracy")
     ax2.set_xlabel("Resting-state data used (minutes)")
     ax2.set_xticks(minutes)
-    ax2.set_title("Episodic-projection signal in the DN-A mask")
+    ax2.set_ylim(0, 1.02)
+    ax2.set_title("Identifying the subject from a held-out scan")
     ax2.legend(loc="lower right", fontsize=8, framealpha=0.9)
     ax2.grid(alpha=0.25)
 
-    fig.suptitle(f"Precision fMRI: individualised DN-A vs amount of rest data (n={n})",
-                 fontsize=11)
+    seed_note = f", {n_seeds} random run-subsets/subject" if n_seeds > 1 else ""
+    fig.suptitle(
+        f"Precision fMRI: individualised maps vs amount of rest data "
+        f"(n={n}{seed_note})",
+        fontsize=11,
+    )
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)

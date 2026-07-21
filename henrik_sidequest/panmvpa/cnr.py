@@ -42,15 +42,18 @@ def cnr_from_mask(zmap: np.ndarray, dn_mask: np.ndarray) -> dict:
     return {"cnr": mean_in - mean_out, "mean_in": mean_in, "mean_out": mean_out}
 
 
-def cnr_at(subject: str, minutes: float, zmaps: dict | None = None) -> dict:
-    """DN-A contrast-to-noise at one data level, averaged over epiproj sessions."""
+def cnr_at(
+    subject: str, minutes: float, zmaps: dict | None = None, seed: int | None = None
+) -> dict:
+    """DN-A contrast-to-noise at one data level for one draw, averaged over sessions."""
     zmaps = zmaps if zmaps is not None else epiproj_zmaps(subject)
-    labels = parcellation.build_parcellation(subject, minutes=minutes)
+    labels = parcellation.build_parcellation(subject, minutes=minutes, seed=seed)
     dn_mask = parcellation.dn_a_mask(labels)
 
     per_session = [cnr_from_mask(z, dn_mask) for z in zmaps.values()]
     return {
         "minutes": minutes,
+        "seed": seed,
         "cnr": float(np.mean([r["cnr"] for r in per_session])),
         "cnr_sd_across_sessions": float(np.std([r["cnr"] for r in per_session])),
         "mean_in": float(np.mean([r["mean_in"] for r in per_session])),
@@ -61,8 +64,30 @@ def cnr_at(subject: str, minutes: float, zmaps: dict | None = None) -> dict:
     }
 
 
-def cnr_curve(subject: str, minute_levels: list[float] | None = None) -> list[dict]:
+def cnr_at_seeds(
+    subject: str, minutes: float, n_seeds: int, zmaps: dict | None = None
+) -> dict:
+    """Aggregate CNR over ``n_seeds`` random subsets at one data level."""
+    zmaps = zmaps if zmaps is not None else epiproj_zmaps(subject)
+    per_seed = [cnr_at(subject, minutes, zmaps=zmaps, seed=s) for s in range(n_seeds)]
+    vals = np.array([r["cnr"] for r in per_seed], dtype=float)
+    return {
+        "minutes": minutes,
+        "cnr": float(vals.mean()),            # subject's mean across seeds
+        "cnr_std": float(vals.std(ddof=1)) if len(vals) > 1 else 0.0,
+        "cnr_seeds": vals.tolist(),
+        "n_seeds": len(per_seed),
+        "mean_in": float(np.mean([r["mean_in"] for r in per_seed])),
+        "mean_out": float(np.mean([r["mean_out"] for r in per_seed])),
+        "n_dna_voxels": int(np.mean([r["n_dna_voxels"] for r in per_seed])),
+        "n_sessions": per_seed[0]["n_sessions"],
+    }
+
+
+def cnr_curve(
+    subject: str, minute_levels: list[float] | None = None, n_seeds: int = 1
+) -> list[dict]:
     """DN-A contrast-to-noise across the standard minute levels (Z-maps fit once)."""
     levels = minute_levels if minute_levels is not None else config.MINUTE_LEVELS
     zmaps = epiproj_zmaps(subject)
-    return [cnr_at(subject, m, zmaps=zmaps) for m in levels]
+    return [cnr_at_seeds(subject, m, n_seeds, zmaps=zmaps) for m in levels]

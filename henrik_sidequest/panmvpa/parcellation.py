@@ -163,16 +163,18 @@ def build_parcellation(
     subject: str,
     minutes: float | None = None,
     runs: list[rest.RestRun] | None = None,
+    seed: int | None = None,
 ) -> np.ndarray:
     """Individualised labels (n_voxels,) for a subject at a data level.
 
-    Pass ``minutes`` to take the fewest leading runs reaching that amount, or pass an
-    explicit ``runs`` list (used for split-half reliability).
+    Pass an explicit ``runs`` list, or ``minutes`` plus an optional ``seed``: without a
+    seed the leading runs are used, with one a reproducible random subset totalling
+    ``minutes`` is drawn.
     """
     if runs is None:
         if minutes is None:
             raise ValueError("Provide either minutes or an explicit runs list.")
-        runs = rest.select_runs(subject, minutes)
+        runs = rest.runs_for(subject, minutes, seed=seed)
     ts = rest.masked_timeseries(runs)
     return winner_take_all(ts)
 

@@ -28,23 +28,40 @@ How much resting-state data do you need before an *individualised* brain map act
 helps classify what task someone is doing? Two curves, one figure, shared x-axis =
 minutes of rest used to build the parcellation.
 
-- **Plot 1 — DN-A reliability.** At each data level, split the rest in half, build a
+- **Plot 1 — map stability.** At each data level, split the rest in half, build a
   parcellation from each half, Dice-overlap the two DN-A masks.
-- **Plot 2 — DN-A contrast-to-noise.** At each data level, build one parcellation and
-  measure how far the epiproj signal inside DN-A sits above the rest of cortex:
-  `CNR = mean(Z inside DN-A) − mean(Z in all other network voxels)`.
+- **Plot 2 — subject identification.** At each data level, build all 10 subjects' maps,
+  then take a held-out scan and score it against every map by within-network homogeneity
+  (mean voxel-voxel correlation within a network, averaged over the 17 networks). The
+  best-fitting map is the prediction. Chance = 1/10.
+
+Each level is repeated over `--n-seeds` random subsets of rest runs, so every subject
+gets error bars and a noisy subject can be told apart from a flat effect.
 
 The x-axis is capped at **100 min** so all 10 subjects contribute at every level (PAN03
 and PAN05 have only ~105 min of rest, PAN07 ~115).
 
-### Why CNR rather than a classifier
+### Design notes worth knowing
 
-Plot 2 was originally 4-class task decoding (language / ToM / epiproj / control). That
-requires sessions containing all four tasks, and only PAN01/PAN02 have 4 such sessions —
-six subjects have just 2 (8 samples for a 4-class SVM). CNR needs only the epiproj runs
-that every subject has: no classifier, no cross-validation, no session-overlap
-requirement. `mvpa.py` is retained for revisiting classification on PAN01/PAN02 as a
-supplementary analysis; `run_all.py` does not call it.
+- **Held-out scans are task runs only.** Task runs are never used to build maps at any
+  level, so the test set is *identical* along the whole x-axis. Leftover rest runs would
+  change with level and seed, confounding "better maps" with "different test data".
+- **Homogeneity rises as networks shrink**, so a map that carves smaller networks could
+  win for the wrong reason. A size-matched control (each network subsampled to a common
+  voxel count) is reported alongside; the two should agree. `--no-size-matched` skips it.
+- **Seed spread is not comparable across the x-axis.** At 20 min a seed draws 4 runs from
+  a pool of 21-33; at 100 min it draws 20 from 21-24, so PAN03/PAN05 have only *one*
+  spare run and their seeds are near-identical. Error bars therefore narrow toward
+  100 min partly by construction. `spare_runs` is reported per level and the CLI warns
+  when it is <= 1.
+
+Verified: on a held-out PAN01 task scan, homogeneity under PAN01's own 40 min map
+(0.0498) beats the group Yeo-17 atlas (0.0354), which beats a size-preserving shuffle
+(0.0150). A structureless-noise control lands on chance (0.245 over 400 scans, chance
+0.250), so the scorer carries no size bias.
+
+Earlier Plot 2 designs (4-class task decoding, DN-A contrast-to-noise) live on in
+`mvpa.py` and `cnr.py`; `run_all.py` no longer calls them.
 
 ### Method
 
@@ -66,7 +83,9 @@ individualised. **DN-A := DefaultC.**
 - `panmvpa/parcellation.py` — WTA to the fixed group Yeo-17, `dn_a_mask`
 - `panmvpa/reliability.py` — split-half Dice at each data level (Plot 1)
 - `panmvpa/glm.py` — first-level GLM for any task -> task-vs-baseline beta / z-map
-- `panmvpa/cnr.py` — DN-A contrast-to-noise during epiproj (Plot 2)
+- `panmvpa/identify.py` — within-network homogeneity, subject identification (Plot 2)
+- `panmvpa/mapstore.py` — persist maps so raw scans can be deleted after pass 1
+- `panmvpa/cnr.py` — DN-A contrast-to-noise (superseded, retained)
 - `panmvpa/mvpa.py` — 4-class SVM decoding (retained, not run by `run_all.py`)
 - `panmvpa/figure.py` — two-panel group figure (mean ± SEM) + CSV
 - `panmvpa/atlases.py` — download Schaefer-400/Yeo-17 into `atlases/`
@@ -95,21 +114,46 @@ locally and on a hub with no edits. It falls back to the in-repo `data/ds006598`
 
 ## Running on JupyterHub
 
+The whole cohort is 835 runs / **0.64 TB**, which need never be on disk at once. Fetch
+one kind of data at a time and let `--cleanup` delete each subject's raw scans once
+their numbers are computed — disk stays around one subject's worth (~20-60 GB).
+
 ```bash
-git clone <repo-url> && cd panmvpa
+git clone <repo-url> && cd panmvpa && git checkout henrik_sidequest/precision-mvpa
 pip install -e .                       # installs henrik_sidequest/panmvpa
-
 export DATA_DIR=$HOME/data/ds006598
-python henrik_sidequest/scripts/fetch_hub.py --dest $DATA_DIR    # ~200 GB, 10 subjects
-panmvpa-run                                                       # -> results/
+F=henrik_sidequest/scripts/fetch_hub.py
 
+# Pass 1 — rest only: Dice curve + build/save every map, then drop the rest data.
+for S in PAN01 PAN02 PAN03 PAN04 PAN05 PAN06 PAN07 PAN08 PAN09 PAN10; do
+  python $F --dest $DATA_DIR --subjects $S --kind rest
+  panmvpa-run --stage maps --subjects $S --cleanup
+done
+
+# Pass 2 — held-out task scans, scored against ALL subjects' stored maps.
+for S in PAN01 PAN02 PAN03 PAN04 PAN05 PAN06 PAN07 PAN08 PAN09 PAN10; do
+  python $F --dest $DATA_DIR --subjects $S --kind task --max-tasks 12
+  panmvpa-run --stage identify --subjects $S --cleanup
+done
+
+panmvpa-run --stage figure
 git add results/ && git commit -m "hub results" && git push
 ```
 
-`fetch_hub.py` pulls straight from OpenNeuro's public S3 over HTTPS — stdlib only, no
-datalad or git-annex to install. It grabs 20 rest runs (~100 min) plus all epiproj runs
-per subject, skips files already present at the right size (so an interrupted run
-resumes), and totals roughly 20 GB per subject.
+**Why two passes.** Scoring a scan needs *every* subject's map, so a single
+download-process-delete pass would destroy PAN01's scans before PAN10's map exists. Maps
+are the durable artefact (258 KB each; the full 10x5x10 cohort is ~130 MB) and raw BOLD
+is transient. Pass 2 can therefore score any scan against everyone long after the scans
+are gone. Both stages are resumable: existing maps are not rebuilt and
+`identification.json` accumulates.
+
+`--cleanup` **permanently deletes** the raw BOLD it has finished with. Everything is
+re-downloadable from S3, but do not point it at a dataset you curate by hand.
+
+`fetch_hub.py` pulls from OpenNeuro's public S3 over HTTPS — stdlib only, no datalad or
+git-annex. `--kind rest|task|all` splits the two passes, `--max-tasks N` caps held-out
+runs per subject spread evenly across task families, and files already present at the
+right size are skipped so an interrupted fetch resumes.
 
 **Memory.** The hub's 15 GB is the binding constraint. Subjects are processed one at a
 time and every cache is dropped (and `gc.collect()`ed) between them, so peak RSS tracks a
