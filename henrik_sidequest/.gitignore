@@ -1,0 +1,3 @@
+# Fetched dataset (datalad clone) and GLM outputs — never track
+data/
+derivatives/
