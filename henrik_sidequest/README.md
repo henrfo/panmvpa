@@ -30,9 +30,21 @@ minutes of rest used to build the parcellation.
 
 - **Plot 1 — DN-A reliability.** At each data level, split the rest in half, build a
   parcellation from each half, Dice-overlap the two DN-A masks.
-- **Plot 2 — task decoding.** At each data level, build one parcellation, use its DN-A
-  mask to select voxels, and classify which of 4 tasks is being performed
-  (language / theory-of-mind / episodic projection / cognitive control), chance = 25%.
+- **Plot 2 — DN-A contrast-to-noise.** At each data level, build one parcellation and
+  measure how far the epiproj signal inside DN-A sits above the rest of cortex:
+  `CNR = mean(Z inside DN-A) − mean(Z in all other network voxels)`.
+
+The x-axis is capped at **100 min** so all 10 subjects contribute at every level (PAN03
+and PAN05 have only ~105 min of rest, PAN07 ~115).
+
+### Why CNR rather than a classifier
+
+Plot 2 was originally 4-class task decoding (language / ToM / epiproj / control). That
+requires sessions containing all four tasks, and only PAN01/PAN02 have 4 such sessions —
+six subjects have just 2 (8 samples for a 4-class SVM). CNR needs only the epiproj runs
+that every subject has: no classifier, no cross-validation, no session-overlap
+requirement. `mvpa.py` is retained for revisiting classification on PAN01/PAN02 as a
+supplementary analysis; `run_all.py` does not call it.
 
 ### Method
 
@@ -53,9 +65,10 @@ individualised. **DN-A := DefaultC.**
 - `panmvpa/rest.py` — enumerate rest runs, concatenate to a target number of minutes
 - `panmvpa/parcellation.py` — WTA to the fixed group Yeo-17, `dn_a_mask`
 - `panmvpa/reliability.py` — split-half Dice at each data level (Plot 1)
-- `panmvpa/glm.py` — first-level GLM for any task -> task-vs-baseline beta per session
-- `panmvpa/mvpa.py` — 4-class features from the DN-A mask, SVM, leave-one-session-out CV
-- `panmvpa/figure.py` — two-panel figure + CSV
+- `panmvpa/glm.py` — first-level GLM for any task -> task-vs-baseline beta / z-map
+- `panmvpa/cnr.py` — DN-A contrast-to-noise during epiproj (Plot 2)
+- `panmvpa/mvpa.py` — 4-class SVM decoding (retained, not run by `run_all.py`)
+- `panmvpa/figure.py` — two-panel group figure (mean ± SEM) + CSV
 - `panmvpa/atlases.py` — download Schaefer-400/Yeo-17 into `atlases/`
 - `scripts/run_all.py` — end-to-end: both curves, PNG + CSV
 - `fetch_data.py` / `verify.py` — data fetch + smoke test
@@ -64,10 +77,14 @@ individualised. **DN-A := DefaultC.**
 ## Running it
 
 ```bash
-python scripts/run_all.py --subject PAN01
+python scripts/run_all.py                      # all 10 subjects -> group figure
+python scripts/run_all.py --subjects PAN01     # single subject
 ```
 
-Multi-subject is a loop over `--subject`; nothing in the pipeline is PAN01-specific.
+Writes `derivatives/figures/group_figure.png` (mean across subjects ± 1 SEM, with faint
+per-subject traces) and `group_curves.csv` (per-subject rows + GROUP_MEAN / GROUP_SEM).
+Subjects lacking enough rest or any fetched epiproj run are skipped with a warning
+rather than aborting the run.
 
 ## Getting the data
 

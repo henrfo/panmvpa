@@ -49,12 +49,10 @@ def subtask_present(subject: str, session: int, task: str) -> bool:
     )
 
 
-@lru_cache(maxsize=256)
-def task_beta(subject: str, session: int, task: str) -> np.ndarray:
-    """Task-vs-baseline effect-size beta over the analysis domain (cached)."""
+def _fit(subject: str, session: int, task: str) -> FirstLevelModel:
     img = nib.load(str(config.bold_path(subject, session, task)))
     ev = task_events(subject, session, task)
-    glm = FirstLevelModel(
+    model = FirstLevelModel(
         t_r=config.TR,
         slice_time_ref=0.0,           # slice timing NOT corrected in this dataset
         hrf_model="glover",
@@ -64,8 +62,29 @@ def task_beta(subject: str, session: int, task: str) -> np.ndarray:
         minimize_memory=True,
         standardize=False,
     )
-    glm.fit(img, events=ev)
-    eff = glm.compute_contrast(task, output_type="effect_size")
-    arr = np.asarray(eff.get_fdata(), dtype=np.float32)
+    model.fit(img, events=ev)
+    return model
+
+
+def _sample_domain(img) -> np.ndarray:
+    arr = np.asarray(img.get_fdata(), dtype=np.float32)
     idx = parcellation.analysis_domain()
     return arr[idx[0], idx[1], idx[2]]
+
+
+@lru_cache(maxsize=256)
+def task_beta(subject: str, session: int, task: str) -> np.ndarray:
+    """Task-vs-baseline effect-size beta over the analysis domain (cached)."""
+    model = _fit(subject, session, task)
+    return _sample_domain(model.compute_contrast(task, output_type="effect_size"))
+
+
+@lru_cache(maxsize=256)
+def task_zmap(subject: str, session: int, task: str) -> np.ndarray:
+    """Task-vs-baseline z-statistic over the analysis domain (cached).
+
+    Z rather than beta so the contrast-to-noise metric is on a unitless, noise-normalised
+    scale that is comparable across sessions and subjects.
+    """
+    model = _fit(subject, session, task)
+    return _sample_domain(model.compute_contrast(task, output_type="z_score"))

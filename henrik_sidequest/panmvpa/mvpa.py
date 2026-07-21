@@ -15,7 +15,11 @@ from __future__ import annotations
 from functools import lru_cache
 
 import numpy as np
-from sklearn.model_selection import LeaveOneGroupOut, cross_val_score
+from sklearn.model_selection import (
+    LeaveOneGroupOut,
+    StratifiedShuffleSplit,
+    cross_val_score,
+)
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
@@ -24,6 +28,11 @@ from . import config, events, glm, parcellation
 
 # Class label = order in config.DECODING_FAMILIES.
 FAMILIES = list(config.DECODING_FAMILIES)  # ["language","tom","epiproj","control"]
+
+# Repeated random splits give error bars that 4 fixed folds cannot.
+N_SPLITS = 50
+TEST_SIZE = 0.25
+RANDOM_STATE = 0
 
 
 def present_subtasks(subject: str, session: int, family: str) -> list[str]:
@@ -88,19 +97,43 @@ def _design_matrix(betas: dict, dn_mask: np.ndarray):
     return np.asarray(X), np.asarray(y), np.asarray(groups)
 
 
+def _classifier():
+    return make_pipeline(StandardScaler(), LinearSVC(C=1.0, dual="auto"))
+
+
 def decoding_at(subject: str, minutes: float, betas: dict | None = None) -> dict:
-    """Leave-one-session-out 4-class accuracy using the DN-A mask built at ``minutes``."""
+    """4-class accuracy using the DN-A mask built at ``minutes``.
+
+    Two estimates are reported:
+
+    ``accuracy``      leave-one-session-out. Session-blocked, so no session appears in
+                      both train and test -- the conservative estimate, but with only a
+                      handful of sessions its resolution is 1/n_samples.
+    ``accuracy_mean`` mean over ``N_SPLITS`` stratified random 75/25 splits, with
+                      ``accuracy_std``. Far finer resolution and gives error bars, but
+                      splits ignore session structure, so betas from one session can land
+                      on both sides and shared session noise may inflate it. Compare the
+                      two rather than trusting either alone.
+    """
     betas = betas if betas is not None else decoding_betas(subject)
     labels = parcellation.build_parcellation(subject, minutes=minutes)
     dn_mask = parcellation.dn_a_mask(labels)
     X, y, groups = _design_matrix(betas, dn_mask)
-    clf = make_pipeline(StandardScaler(), LinearSVC(C=1.0, dual="auto"))
-    scores = cross_val_score(clf, X, y, groups=groups, cv=LeaveOneGroupOut())
+
+    loso = cross_val_score(_classifier(), X, y, groups=groups, cv=LeaveOneGroupOut())
+    shuffle = StratifiedShuffleSplit(
+        n_splits=N_SPLITS, test_size=TEST_SIZE, random_state=RANDOM_STATE
+    )
+    repeated = cross_val_score(_classifier(), X, y, cv=shuffle)
+
     return {
         "minutes": minutes,
-        "accuracy": float(scores.mean()),
+        "accuracy": float(loso.mean()),
+        "accuracy_mean": float(repeated.mean()),
+        "accuracy_std": float(repeated.std()),
+        "n_splits": int(len(repeated)),
         "n_features": int(dn_mask.sum()),
-        "n_folds": len(scores),
+        "n_folds": len(loso),
         "n_samples": len(y),
         "chance": 1.0 / len(FAMILIES),
     }

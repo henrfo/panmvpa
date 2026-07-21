@@ -29,7 +29,9 @@ SPACE = "MNI152NLin6Asym_res-2"
 REST_TASK = "rest"
 # Each PAN rest run is 222 volumes ~= 5.01 min. The reliability/decoding x-axis
 # is minutes of rest; we concatenate whole runs up to each target.
-MINUTE_LEVELS = [20, 40, 60, 80, 100, 120]
+# Capped at 100 min so every subject contributes at every level: PAN03 and PAN05 have
+# only ~105 min of rest and PAN07 ~115, so a 120 min level would silently drop them.
+MINUTE_LEVELS = [20, 40, 60, 80, 100]
 
 # --- Group reference parcellation -----------------------------------------
 # The Yeo-Krienen 17-network taxonomy, realised via Schaefer-400 (its parcels ARE

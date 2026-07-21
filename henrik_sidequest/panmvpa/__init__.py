@@ -10,6 +10,7 @@ from __future__ import annotations
 from . import (
     atlases,
     bold,
+    cnr,
     config,
     events,
     figure,
@@ -19,6 +20,7 @@ from . import (
     reliability,
     rest,
 )
+from .cnr import cnr_curve
 from .bold import find_bold, is_fetched, load_bold
 from .config import CONDITIONS, CONTRASTS, MINUTE_LEVELS, SUBJECTS, TASK, TR
 from .events import build_events, epiproj_sessions, parse_1d_file
@@ -36,6 +38,7 @@ __all__ = [
     "parcellation",
     "reliability",
     "glm",
+    "cnr",
     "mvpa",
     "figure",
     "SUBJECTS",
@@ -55,6 +58,7 @@ __all__ = [
     "build_parcellation",
     "dn_a_mask",
     "reliability_curve",
+    "cnr_curve",
     "decoding_curve",
     "complete_sessions",
 ]
