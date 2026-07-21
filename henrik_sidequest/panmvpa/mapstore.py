@@ -20,7 +20,7 @@ def maps_dir(root: Path | None = None) -> Path:
 
 def map_path(subject: str, minutes: float, seed: int, root: Path | None = None) -> Path:
     sid = config.sub_id(subject)
-    return maps_dir(root) / f"sub-{sid}_min-{int(round(minutes)):03d}_seed-{seed:02d}.npy"
+    return maps_dir(root) / f"sub-{sid}_min-{config.level_key(minutes)}_seed-{seed:02d}.npy"
 
 
 def save_map(labels: np.ndarray, subject: str, minutes: float, seed: int,

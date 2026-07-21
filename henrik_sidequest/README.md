@@ -38,8 +38,13 @@ minutes of rest used to build the parcellation.
 Each level is repeated over `--n-seeds` random subsets of rest runs, so every subject
 gets error bars and a noisy subject can be told apart from a flat effect.
 
-The x-axis is capped at **100 min** so all 10 subjects contribute at every level (PAN03
-and PAN05 have only ~105 min of rest, PAN07 ~115).
+Levels are **{5, 10, 20, 40, 60, 80, 100, Full}** minutes. The numeric levels stop at
+100 so all 10 subjects contribute at each (PAN03/PAN05 have only ~105 min of rest, PAN07
+~115). **Full** means "all the rest this subject has" — 105-165 min depending on subject,
+so it is plotted as a trailing categorical tick, not a numeric position, and its seeds
+collapse to one draw (there is nothing left to vary). The **5 min** level is a single run,
+so it has a map (and an identification point) but no split-half Dice — Plot 1 simply
+has no point there.
 
 ### Design notes worth knowing
 

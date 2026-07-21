@@ -34,15 +34,18 @@ def _mean_sem(rows: list[list[float]]) -> tuple[np.ndarray, np.ndarray]:
 
 def save_group_csv(results: dict, path: Path) -> None:
     """Per-subject Dice rows, group Dice mean/SEM rows, and the identification curve."""
+    from . import config
+
     minutes = results["minutes"]
     subs = results["subjects"]
+    lbl = config.level_label  # 'Full' or '40', never a bare 'inf'
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["subject", "minutes", "dice", "dice_std", "n_seeds", "spare_runs",
+        w.writerow(["subject", "level", "dice", "dice_std", "n_seeds", "spare_runs",
                     "dna_voxels_a", "dna_voxels_b"])
         for sub, res in subs.items():
             for rel in res["reliability"]:
-                w.writerow([sub, rel["minutes"], f"{rel['dice']:.4f}",
+                w.writerow([sub, lbl(rel["minutes"]), f"{rel['dice']:.4f}",
                             f"{rel.get('dice_std', 0.0):.4f}", rel.get("n_seeds", 1),
                             rel.get("spare_runs", ""),
                             rel["n_voxels_a"], rel["n_voxels_b"]])
@@ -50,14 +53,14 @@ def save_group_csv(results: dict, path: Path) -> None:
             [[r["dice"] for r in res["reliability"]] for res in subs.values()]
         )
         for i, m in enumerate(minutes):
-            w.writerow(["GROUP_MEAN", m, f"{dice_mean[i]:.4f}", f"{dice_sem[i]:.4f}",
+            w.writerow(["GROUP_MEAN", lbl(m), f"{dice_mean[i]:.4f}", f"{dice_sem[i]:.4f}",
                         len(subs), "", "", ""])
 
         w.writerow([])
-        w.writerow(["minutes", "identification_accuracy", "accuracy_std",
+        w.writerow(["level", "identification_accuracy", "accuracy_std",
                     "accuracy_size_matched", "chance", "n_scans", "n_seeds"])
         for row in results.get("identification", []):
-            w.writerow([row["minutes"], f"{row['accuracy']:.4f}",
+            w.writerow([lbl(row["minutes"]), f"{row['accuracy']:.4f}",
                         f"{row['accuracy_std']:.4f}",
                         f"{row['accuracy_size_matched']:.4f}",
                         f"{results.get('chance', float('nan')):.4f}",
@@ -65,7 +68,13 @@ def save_group_csv(results: dict, path: Path) -> None:
 
 
 def plot_group(results: dict, path: Path) -> None:
-    minutes = np.asarray(results["minutes"], dtype=float)
+    from . import config
+
+    # FULL (infinite) has no numeric x position and differs per subject, so we plot every
+    # level at an evenly spaced categorical tick and label them, with FULL last.
+    levels = results["minutes"]
+    minutes = np.arange(len(levels), dtype=float)
+    tick_labels = [config.level_label(m) for m in levels]
     subs = results["subjects"]
     dice_rows = [[r["dice"] for r in res["reliability"]] for res in subs.values()]
     dice_mean, dice_sem = _mean_sem(dice_rows)
@@ -110,17 +119,17 @@ def plot_group(results: dict, path: Path) -> None:
     ax2.set_ylabel("Subject identification accuracy")
     ax2.set_xlabel("Resting-state data used (minutes)")
     ax2.set_xticks(minutes)
+    ax2.set_xticklabels(tick_labels)
     ax2.set_ylim(0, 1.02)
     ax2.set_title("Identifying the subject from a held-out scan")
     ax2.legend(loc="lower right", fontsize=8, framealpha=0.9)
     ax2.grid(alpha=0.25)
 
-    seed_note = f", {n_seeds} random run-subsets/subject" if n_seeds > 1 else ""
+    seed_note = f", {n_seeds} seeds" if n_seeds > 1 else ""
     fig.suptitle(
-        f"Precision fMRI: individualised maps vs amount of rest data "
-        f"(n={n}{seed_note})",
+        f"Individualised maps vs amount of rest data (n={n}{seed_note})",
         fontsize=11,
     )
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0, 1, 0.98))
     fig.savefig(path, dpi=150)
     plt.close(fig)

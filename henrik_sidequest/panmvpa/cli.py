@@ -40,6 +40,7 @@ from . import (
     mapstore,
     parcellation,
     reliability,
+    rest,
 )
 
 
@@ -49,8 +50,19 @@ def _peak_gb() -> float:
 
 
 def _write(path: Path, obj) -> None:
+    # allow_nan=False keeps the JSON strict-parser-safe; the FULL sentinel (inf) and any
+    # NaN Dice are written as null and re-read as such.
+    def clean(o):
+        if isinstance(o, float) and (o != o or o in (float("inf"), float("-inf"))):
+            return None
+        if isinstance(o, dict):
+            return {k: clean(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [clean(v) for v in o]
+        return o
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, indent=2))
+    path.write_text(json.dumps(clean(obj), indent=2))
 
 
 def _read(path: Path, default):
@@ -67,19 +79,32 @@ def stage_maps(subjects, minutes, n_seeds, outdir: Path, cleanup: bool) -> None:
             rel = reliability.reliability_curve(sid, minutes, n_seeds=n_seeds)
             for r in rel:
                 spare = r.get("spare_runs")
-                warn = (f"  <- only {spare} spare run(s), seeds near-identical"
-                        if spare is not None and spare <= 1 and n_seeds > 1 else "")
-                print(f"    {r['minutes']:>4.0f} min | Dice {r['dice']:.3f}"
-                      f"±{r['dice_std']:.3f} | {r['n_seeds']} seeds{warn}", flush=True)
+                if r.get("too_few_runs"):
+                    note = "  <- <2 runs, no split-half possible"
+                elif spare == 0:
+                    note = "  <- no spare runs, 1 seed (all draws identical)"
+                elif spare is not None and spare <= 1 and n_seeds > 1:
+                    note = f"  <- only {spare} spare run(s), seeds near-identical"
+                else:
+                    note = ""
+                dice_txt = ("   n/a" if not np.isfinite(r["dice"])
+                            else f"{r['dice']:.3f}±{r['dice_std']:.3f}")
+                print(f"    {config.level_label(r['minutes']):>5} min | Dice {dice_txt}"
+                      f" | {r['n_seeds']} seeds{note}", flush=True)
+            n_maps = 0
             for m in minutes:
-                for seed in range(n_seeds):
+                # No spare runs => every seed is the same subset; one map suffices.
+                eff = 1 if rest.sampling_headroom(sid, m).get("spare_runs") == 0 else n_seeds
+                for seed in range(eff):
                     if mapstore.has_map(sid, m, seed):
+                        n_maps += 1
                         continue
                     labels = parcellation.build_parcellation(sid, minutes=m, seed=seed)
                     mapstore.save_map(labels, sid, m, seed)
+                    n_maps += 1
             store[sid] = rel
             _write(outdir / "reliability.json", store)
-            print(f"    saved {len(minutes) * n_seeds} maps", flush=True)
+            print(f"    saved {n_maps} maps", flush=True)
             if cleanup:
                 freed = cleanup_subject(sid, kind="rest")
                 print(f"    cleaned {freed:.1f} GB of rest", flush=True)

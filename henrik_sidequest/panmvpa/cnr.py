@@ -69,7 +69,9 @@ def cnr_at_seeds(
 ) -> dict:
     """Aggregate CNR over ``n_seeds`` random subsets at one data level."""
     zmaps = zmaps if zmaps is not None else epiproj_zmaps(subject)
-    per_seed = [cnr_at(subject, minutes, zmaps=zmaps, seed=s) for s in range(n_seeds)]
+    from . import rest
+    effective = 1 if rest.sampling_headroom(subject, minutes).get("spare_runs") == 0 else n_seeds
+    per_seed = [cnr_at(subject, minutes, zmaps=zmaps, seed=s) for s in range(effective)]
     vals = np.array([r["cnr"] for r in per_seed], dtype=float)
     return {
         "minutes": minutes,

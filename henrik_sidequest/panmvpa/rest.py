@@ -77,6 +77,10 @@ def run_minutes(run: RestRun) -> float:
 
 
 def _take_until(runs: list[RestRun], order, minutes: float, subject: str) -> list[RestRun]:
+    if not runs:
+        raise ValueError(f"{config.sub_id(subject)}: no fetched rest runs on disk.")
+    if config.is_full(minutes):
+        return [runs[i] for i in order]  # FULL = everything this subject has
     chosen: list[RestRun] = []
     total = 0.0
     for i in order:
@@ -116,6 +120,8 @@ def sample_runs(
     do with the estimate being more stable. See ``sampling_headroom``.
     """
     runs = runs if runs is not None else rest_runs(subject, fetched_only=True)
+    if config.is_full(minutes):
+        return list(runs)  # every seed draws the same set; nothing to randomise
     rng = np.random.default_rng([zlib.crc32(config.sub_id(subject).encode()),
                                  int(round(minutes)), int(seed)])
     return _take_until(runs, rng.permutation(len(runs)), minutes, subject)
@@ -141,6 +147,10 @@ def sampling_headroom(subject: str, minutes: float) -> dict:
     """
     runs = rest_runs(subject, fetched_only=True)
     total = sum(run_minutes(r) for r in runs)
+    if config.is_full(minutes):
+        # FULL uses everything, so there is nothing left to vary between seeds.
+        return {"n_runs": len(runs), "total_minutes": total,
+                "runs_needed": len(runs), "spare_runs": 0}
     needed = len(select_runs(subject, minutes, runs=runs)) if total >= minutes else None
     return {
         "n_runs": len(runs),

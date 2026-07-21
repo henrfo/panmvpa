@@ -38,9 +38,26 @@ SPACE = "MNI152NLin6Asym_res-2"
 REST_TASK = "rest"
 # Each PAN rest run is 222 volumes ~= 5.01 min. The reliability/decoding x-axis
 # is minutes of rest; we concatenate whole runs up to each target.
-# Capped at 100 min so every subject contributes at every level: PAN03 and PAN05 have
-# only ~105 min of rest and PAN07 ~115, so a 120 min level would silently drop them.
-MINUTE_LEVELS = [20, 40, 60, 80, 100]
+# Numeric levels stop at 100 min so every subject contributes at each of them (PAN03 and
+# PAN05 have only ~105 min of rest, PAN07 ~115). FULL is a sentinel meaning "all the rest
+# this subject has", which differs per subject (105-165 min) and so is plotted as a
+# trailing categorical tick rather than at a numeric x position.
+FULL = float("inf")
+MINUTE_LEVELS = [5, 10, 20, 40, 60, 80, 100, FULL]
+
+
+def is_full(minutes: float) -> bool:
+    return minutes == FULL
+
+
+def level_label(minutes: float) -> str:
+    """Human label for a data level: 'Full' or e.g. '40'."""
+    return "Full" if is_full(minutes) else f"{minutes:g}"
+
+
+def level_key(minutes: float) -> str:
+    """Filename-safe key for a data level: 'full' or e.g. '040'."""
+    return "full" if is_full(minutes) else f"{int(round(minutes)):03d}"
 
 # --- Group reference parcellation -----------------------------------------
 # The Yeo-Krienen 17-network taxonomy, realised via Schaefer-400 (its parcels ARE
