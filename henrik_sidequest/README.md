@@ -77,14 +77,62 @@ individualised. **DN-A := DefaultC.**
 ## Running it
 
 ```bash
-python scripts/run_all.py                      # all 10 subjects -> group figure
-python scripts/run_all.py --subjects PAN01     # single subject
+panmvpa-run                          # all 10 subjects -> group figure
+panmvpa-run --subjects PAN01         # single subject
+python scripts/run_all.py            # same thing, without installing
 ```
 
-Writes `derivatives/figures/group_figure.png` (mean across subjects ± 1 SEM, with faint
-per-subject traces) and `group_curves.csv` (per-subject rows + GROUP_MEAN / GROUP_SEM).
+Writes `results/group_figure.png` (mean across subjects ± 1 SEM, with faint per-subject
+traces), `group_curves.csv` (per-subject rows + GROUP_MEAN / GROUP_SEM) and
+`group_results.json`. `results/` is tracked in git so hub output can be pulled back.
 Subjects lacking enough rest or any fetched epiproj run are skipped with a warning
 rather than aborting the run.
+
+### Where the data lives
+
+`DATA_DIR` (or `PANMVPA_DATA`) points at the ds006598 root, so the same code runs
+locally and on a hub with no edits. It falls back to the in-repo `data/ds006598` clone.
+
+## Running on JupyterHub
+
+```bash
+git clone <repo-url> && cd panmvpa
+pip install -e .                       # installs henrik_sidequest/panmvpa
+
+export DATA_DIR=$HOME/data/ds006598
+python henrik_sidequest/scripts/fetch_hub.py --dest $DATA_DIR    # ~200 GB, 10 subjects
+panmvpa-run                                                       # -> results/
+
+git add results/ && git commit -m "hub results" && git push
+```
+
+`fetch_hub.py` pulls straight from OpenNeuro's public S3 over HTTPS — stdlib only, no
+datalad or git-annex to install. It grabs 20 rest runs (~100 min) plus all epiproj runs
+per subject, skips files already present at the right size (so an interrupted run
+resumes), and totals roughly 20 GB per subject.
+
+**Memory.** The hub's 15 GB is the binding constraint. Subjects are processed one at a
+time and every cache is dropped (and `gc.collect()`ed) between them, so peak RSS tracks a
+single subject, not the cohort. **Measured peak: 7.7 GB for one subject at the 100 min
+level** (PAN01, 132k-voxel domain) — it fits in 15 GB but not by a huge margin. Peak RSS
+is printed after each subject; watch the first one.
+
+If it is tight, shrink the rest-run cache — this trades re-reads for headroom and costs
+roughly 120 MB per cached run:
+
+```bash
+export PANMVPA_REST_CACHE=6     # default is 10
+```
+
+The dominant costs are the concatenated timeseries at the top data level (~2.3 GB) and
+nilearn's GLM fit; both scale with the number of domain voxels and TRs, not with cohort
+size.
+
+**Long runs.** Enable the Jupyter keepalive plugin (`cmd-shift-C`, search "keep", set
+24 h) — a full 10-subject run takes well over an hour.
+
+Note the repo root installs the package from `henrik_sidequest/panmvpa`; the driver is
+importable as `panmvpa.cli`, which is why `panmvpa-run` works from any directory.
 
 ## Getting the data
 

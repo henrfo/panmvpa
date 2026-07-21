@@ -7,6 +7,7 @@ concatenation, so run-level offsets/scale don't leak into the connectivity estim
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -18,6 +19,13 @@ import nibabel as nib
 from . import config
 
 _SES_RUN = re.compile(r"_ses-(\d+)_.*_run-(\d+)_")
+
+# Each cached run is ~n_domain_voxels * n_timepoints * 4 B (~120 MB at 132k voxels /
+# 222 TRs), and the concatenated timeseries at the top data level costs about as much
+# again. Caching a whole 20-run working set therefore roughly doubles peak memory, so
+# the default trades some re-reading for headroom on a 15 GB box. Raise it if you have
+# RAM to spare, lower it (e.g. 8) if you are still tight.
+REST_CACHE_RUNS = int(os.environ.get("PANMVPA_REST_CACHE", "10"))
 
 
 @dataclass(frozen=True)
@@ -83,7 +91,7 @@ def select_runs(subject: str, minutes: float, runs: list[RestRun] | None = None)
     return chosen
 
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=REST_CACHE_RUNS)
 def _load_masked_run(path_str: str, domain_hash: int) -> np.ndarray:
     """(n_voxels, n_timepoints) z-scored timeseries for one run over the analysis domain.
 
@@ -93,13 +101,21 @@ def _load_masked_run(path_str: str, domain_hash: int) -> np.ndarray:
     from .parcellation import analysis_domain  # local import to avoid import cycle
 
     idx = analysis_domain()  # (3, n_voxels) voxel coordinates, fixed group domain
-    data = nib.load(path_str).get_fdata(dtype=np.float32)
+    # dataobj + explicit float32 keeps the transient whole-volume array half the size
+    # get_fdata()'s float64 would be, which matters on a 15 GB box.
+    data = np.asarray(nib.load(path_str).dataobj, dtype=np.float32)
     ts = data[idx[0], idx[1], idx[2], :]  # (n_voxels, n_time)
+    del data
     # z-score each voxel over time; flat voxels (std 0) -> 0 so they never dominate.
     mu = ts.mean(axis=1, keepdims=True)
     sd = ts.std(axis=1, keepdims=True)
     ts = np.divide(ts - mu, sd, out=np.zeros_like(ts), where=sd > 0)
     return ts
+
+
+def clear_cache() -> None:
+    """Drop cached run timeseries (call between subjects to bound peak memory)."""
+    _load_masked_run.cache_clear()
 
 
 def masked_timeseries(runs: list[RestRun]) -> np.ndarray:

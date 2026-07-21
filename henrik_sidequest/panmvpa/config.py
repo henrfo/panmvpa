@@ -12,11 +12,20 @@ from pathlib import Path
 PKG_DIR = Path(__file__).resolve().parent
 REPO_DIR = PKG_DIR.parent  # henrik_sidequest/
 
-# Point PANMVPA_DATA at your datalad clone of ds006598.
-DATA_ROOT = Path(os.environ.get("PANMVPA_DATA", REPO_DIR / "data" / "ds006598"))
+# Dataset location. Set DATA_DIR (or PANMVPA_DATA) to your clone of ds006598 so the same
+# code runs locally and on a JupyterHub without editing anything. Falls back to the
+# in-repo clone used during local development.
+DATA_ROOT = Path(
+    os.environ.get("DATA_DIR")
+    or os.environ.get("PANMVPA_DATA")
+    or REPO_DIR / "data" / "ds006598"
+)
 
 ATLAS_DIR = REPO_DIR / "atlases"       # downloaded template atlases live here
-DERIV_ROOT = REPO_DIR / "derivatives"  # any derived outputs
+DERIV_ROOT = REPO_DIR / "derivatives"  # scratch/derived outputs (gitignored)
+
+# Figures + CSVs that we DO want in git, so hub results can be pulled back locally.
+RESULTS_DIR = Path(os.environ.get("PANMVPA_RESULTS") or REPO_DIR.parent / "results")
 
 # --- Subjects --------------------------------------------------------------
 SUBJECTS = [f"PAN{n:02d}" for n in range(1, 11)]  # PAN01 .. PAN10

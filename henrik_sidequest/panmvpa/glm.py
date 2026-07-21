@@ -67,7 +67,9 @@ def _fit(subject: str, session: int, task: str) -> FirstLevelModel:
 
 
 def _sample_domain(img) -> np.ndarray:
-    arr = np.asarray(img.get_fdata(), dtype=np.float32)
+    # dataobj rather than get_fdata(): the latter always materialises float64, which
+    # doubles the transient allocation for no benefit here.
+    arr = np.asarray(img.dataobj, dtype=np.float32)
     idx = parcellation.analysis_domain()
     return arr[idx[0], idx[1], idx[2]]
 

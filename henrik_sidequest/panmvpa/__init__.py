@@ -29,6 +29,22 @@ from .parcellation import build_parcellation, dn_a_mask
 from .reliability import reliability_curve
 from .rest import rest_runs, select_runs
 
+
+def clear_caches() -> None:
+    """Free every per-subject cache (rest timeseries, GLM betas/z-maps).
+
+    ``run_all.py`` calls this between subjects so peak memory tracks one subject rather
+    than the whole cohort -- the 15 GB hub cannot hold 10 subjects' timeseries at once.
+    """
+    import gc
+
+    rest.clear_cache()
+    glm.task_beta.cache_clear()
+    glm.task_zmap.cache_clear()
+    cnr.epiproj_zmaps.cache_clear()
+    mvpa.decoding_betas.cache_clear()
+    gc.collect()  # cache_clear only drops references; collect actually reclaims
+
 __all__ = [
     "config",
     "events",
@@ -61,4 +77,5 @@ __all__ = [
     "cnr_curve",
     "decoding_curve",
     "complete_sessions",
+    "clear_caches",
 ]
