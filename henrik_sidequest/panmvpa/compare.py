@@ -43,21 +43,35 @@ def within_subject(subject: str, block: int) -> np.ndarray | None:
     return _nanmean_rows(rows) if rows else None
 
 
-def between_subjects(subjects: list[str], block: int) -> np.ndarray | None:
+def between_subjects(subjects: list[str], block: int,
+                     minutes: dict[str, float] | None = None
+                     ) -> tuple[np.ndarray | None, list[dict]]:
     """Per-network Dice between different subjects at matched chunk and data amount.
 
-    Matched means the same (start, size) block for both people, so any difference cannot
-    come from one map having more data or covering a different part of the session.
+    Matched means the same (start, size) block for both people, so a difference cannot
+    come from one map having more data *within* the block. Two subjects still differ in
+    absolute duration, so each pair also carries the mean of their two durations -- that
+    is the x-coordinate when the axis is minutes.
+
+    Returns (mean over pairs per network, per-pair records).
     """
-    starts = list(range(0, config.N_CHUNKS, block))
-    rows = []
-    for start in starts:
+    rows, pairs = [], []
+    for start in range(0, config.N_CHUNKS, block):
         spec = (start, block)
         have = [s for s in subjects if parcellation.has_map(s, spec)]
         for a, b in combinations(have, 2):
-            rows.append(parcellation.dice_per_network(parcellation.load_map(a, spec),
-                                                      parcellation.load_map(b, spec)))
-    return _nanmean_rows(rows) if rows else None
+            per = parcellation.dice_per_network(parcellation.load_map(a, spec),
+                                                parcellation.load_map(b, spec))
+            rows.append(per)
+            rec = {"level": config.level_name(block), "subjects": [a, b],
+                   "dice": family_mean(per),
+                   "association": family_mean(per, "association"),
+                   "sensorimotor": family_mean(per, "sensorimotor")}
+            if minutes and a in minutes and b in minutes:
+                frac = block / config.N_CHUNKS
+                rec["minutes"] = 0.5 * (minutes[a] + minutes[b]) * frac
+            pairs.append(rec)
+    return (_nanmean_rows(rows) if rows else None), pairs
 
 
 def to_group(subject: str, block: int) -> np.ndarray | None:
@@ -97,18 +111,21 @@ def crossover(levels: list[str], within: list[float], group: list[float]) -> str
     return None
 
 
-def compare_all(subjects: list[str]) -> dict:
+def compare_all(subjects: list[str], minutes: dict[str, float] | None = None) -> dict:
     """Every comparison at every level, per network and per family.
 
-    Returns {"per_subject": {sub: [row, ...]}, "between": [row, ...]} where each row
-    covers one data level.
+    ``minutes`` maps subject -> total minutes of rest, so each point can carry its real
+    duration. Fractions are not comparable across subjects (one person's 8/16 may be
+    53 min and another's 83 min), so minutes is the interpretable x-axis.
     """
     names = list(parcellation.network_order())
-    out: dict = {"networks": names, "per_subject": {}, "between": []}
+    out: dict = {"networks": names, "per_subject": {}, "between": [],
+                 "between_pairs": [], "total_minutes": dict(minutes or {})}
 
     for block in config.STABILITY_BLOCKS:
         level = config.level_name(block)
-        btw = between_subjects(subjects, block)
+        btw, pairs = between_subjects(subjects, block, minutes)
+        out["between_pairs"].extend(pairs)
         out["between"].append({
             "level": level,
             "dice": family_mean(btw),
@@ -125,6 +142,8 @@ def compare_all(subjects: list[str]) -> dict:
             win, grp = within_subject(subject, block), to_group(subject, block)
             rows.append({
                 "level": level,
+                "minutes": (minutes[subject] * block / config.N_CHUNKS
+                            if minutes and subject in minutes else None),
                 "within": family_mean(win),
                 "to_group": family_mean(grp),
                 "within_association": family_mean(win, "association"),

@@ -212,7 +212,25 @@ def stage_compare(subjects, outdir: Path) -> None:
         raise SystemExit("Need maps for >=2 subjects -- run `--stage maps` first.")
     print(f"comparing {len(have)} subjects: {have}", flush=True)
 
-    result = compare.compare_all(have)
+    # Durations come from stability.json, written by `maps` while BOLD was still on disk.
+    # Chunks are equal-duration, so total = minutes(block) * N_CHUNKS / block.
+    minutes = {}
+    for sub, rows in _read(outdir / "stability.json", {}).items():
+        for row in rows:
+            block = int(row["level"].split("/")[0])
+            if row.get("minutes"):
+                minutes[sub] = row["minutes"] * config.N_CHUNKS / block
+                break
+    missing = [s for s in have if s not in minutes]
+    if missing:
+        print(f"  ! no duration recorded for {missing}; those points will lack a "
+              f"minutes coordinate (re-run `--stage maps` with BOLD present to fix)",
+              flush=True)
+    else:
+        print("  total rest per subject: "
+              + ", ".join(f"{s} {minutes[s]:.0f}m" for s in have), flush=True)
+
+    result = compare.compare_all(have, minutes)
     _write(outdir / "comparisons.json", result)
 
     print(f"\n{'level':>6} {'within':>8} {'between':>8} {'to-group':>9}   "

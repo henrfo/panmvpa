@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 import matplotlib
+import matplotlib.ticker as mticker
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -151,11 +152,12 @@ def save_comparison_csv(results: dict, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["subject", "level", "network", "family", "comparison", "dice"])
+        w.writerow(["subject", "level", "minutes", "network", "family",
+                    "comparison", "dice"])
 
         for row in comp.get("between", []):
             for net, val in (row.get("per_network") or {}).items():
-                w.writerow(["GROUP", row["level"], net, families.get(net, "?"),
+                w.writerow(["GROUP", row["level"], "", net, families.get(net, "?"),
                             "between", _fmt(val)])
 
         for sub, res in comp.get("per_subject", {}).items():
@@ -163,8 +165,8 @@ def save_comparison_csv(results: dict, path: Path) -> None:
                 for key, tag in (("within_per_network", "within"),
                                  ("to_group_per_network", "to_group")):
                     for net, val in (row.get(key) or {}).items():
-                        w.writerow([sub, row["level"], net, families.get(net, "?"),
-                                    tag, _fmt(val)])
+                        w.writerow([sub, row["level"], _fmt(row.get("minutes")), net,
+                                    families.get(net, "?"), tag, _fmt(val)])
 
         w.writerow([])
         w.writerow(["subject", "crossover_level"])
@@ -172,81 +174,150 @@ def save_comparison_csv(results: dict, path: Path) -> None:
             w.writerow([sub, res.get("crossover") or "never"])
 
 
+def _log_x(ax) -> None:
+    """Log-scale the x-axis, but only if something positive was actually plotted.
+
+    Matplotlib raises if every x is <= 0, which happens when durations are missing (an
+    older results file, or maps built before minutes were recorded).
+    """
+    xs = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
+                         if len(c.get_offsets())]) if ax.collections else np.array([])
+    if not (xs.size and np.nanmax(xs) > 0):
+        return
+    ax.set_xscale("log")
+    # Plain minute labels; the default log formatter renders these as 3x10^0 etc.
+    lo, hi = np.nanmin(xs[xs > 0]), np.nanmax(xs)
+    ticks = [t for t in (1, 2, 5, 10, 20, 30, 60, 90, 120, 180) if lo * 0.9 <= t <= hi * 1.1]
+    if len(ticks) >= 2:
+        ax.set_xticks(ticks)
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:g}"))
+    ax.xaxis.set_minor_formatter(mticker.NullFormatter())
+
+
+def _logfit(x: np.ndarray, y: np.ndarray, n_points: int = 100):
+    """Least-squares fit of y against log(minutes), evaluated on a smooth grid.
+
+    A straight line in log-minutes is the simplest curve that can express "gains shrink
+    as data accumulates", which is what these measures do. Subjects sit at different
+    durations, so we fit the pooled raw points rather than averaging over unequal bins --
+    a bin containing one subject's 53 min and another's 83 min would report a mean at
+    neither. Returns (grid_x, grid_y, slope) or None if there is too little to fit.
+    """
+    ok = np.isfinite(x) & np.isfinite(y) & (x > 0)
+    if ok.sum() < 3 or len(np.unique(x[ok])) < 2:
+        return None
+    lx = np.log(x[ok])
+    slope, intercept = np.polyfit(lx, y[ok], 1)
+    gx = np.linspace(x[ok].min(), x[ok].max(), n_points)
+    return gx, intercept + slope * np.log(gx), slope
+
+
+def _scatter_fit(ax, x, y, color, label, marker="o"):
+    """Raw points plus a log-minutes trend line through them."""
+    ax.scatter(x, y, s=22, color=color, alpha=0.55, marker=marker,
+               edgecolors="none", label=label)
+    fit = _logfit(np.asarray(x, float), np.asarray(y, float))
+    if fit is not None:
+        gx, gy, _ = fit
+        ax.plot(gx, gy, color=color, lw=2.2, alpha=0.95)
+    return fit
+
+
+def _points(comp: dict, field: str) -> tuple[np.ndarray, np.ndarray]:
+    """(minutes, value) for every subject x level with a recorded duration."""
+    xs, ys = [], []
+    for res in comp.get("per_subject", {}).values():
+        for row in res.get("levels", []):
+            if row.get("minutes") and row.get(field) is not None:
+                xs.append(row["minutes"]); ys.append(row[field])
+    return np.array(xs, float), np.array(ys, float)
+
+
+def _between_points(comp: dict, field: str = "dice") -> tuple[np.ndarray, np.ndarray]:
+    xs, ys = [], []
+    for rec in comp.get("between_pairs", []):
+        if rec.get("minutes") and rec.get(field) is not None:
+            xs.append(rec["minutes"]); ys.append(rec[field])
+    return np.array(xs, float), np.array(ys, float)
+
+
 def plot_comparisons(results: dict, path: Path) -> None:
-    """Three panels: within/between/to-group, the family split, and the margin curve."""
+    """Three panels on a shared minutes axis: individuation, family split, margin.
+
+    Minutes, not fractions: a fraction means a different amount of data for each subject,
+    which would make a subject with less rest look like a more variable brain.
+    """
     comp = results.get("comparisons", {})
     if not comp.get("per_subject"):
         return
-    levels = [config.level_name(b) for b in config.STABILITY_BLOCKS]
-    x = np.arange(len(levels), dtype=float)
+    n = len(comp["per_subject"])
+    have_minutes = bool(comp.get("total_minutes"))
 
-    within, within_sem, within_rows = _comparison_series(results, "within")
-    group, group_sem, group_rows = _comparison_series(results, "to_group")
-    between = _between_series(results)
-    n = len(within_rows)
+    fig, axes = plt.subplots(1, 3, figsize=(16.5, 5))
 
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4.8))
-
-    # --- A: the three curves, and where within overtakes to-group -------------
+    # --- A: within vs between vs group, all against real duration -------------
     ax = axes[0]
-    for row in within_rows:
-        ax.plot(x, row, color=STABLE_COLOR, alpha=0.2, lw=1)
-    for row in group_rows:
-        ax.plot(x, row, color="#7b3294", alpha=0.15, lw=1)
-    ax.fill_between(x, within - within_sem, within + within_sem,
-                    color=STABLE_COLOR, alpha=0.3, lw=0)
-    ax.plot(x, within, "o-", color=STABLE_COLOR, lw=2.5, label="within-person")
-    ax.plot(x, between, "s-", color="#999999", lw=2, label="between-person (null)")
-    ax.fill_between(x, group - group_sem, group + group_sem, color="#7b3294",
-                    alpha=0.2, lw=0)
-    ax.plot(x, group, "^-", color="#7b3294", lw=2, label="similarity to group")
+    wx, wy = _points(comp, "within")
+    gx_, gy_ = _points(comp, "to_group")
+    bx, by = _between_points(comp)
+    fit_w = _scatter_fit(ax, wx, wy, STABLE_COLOR, "within-person", "o")
+    _scatter_fit(ax, bx, by, "#999999", "between-person (null)", "s")
+    fit_g = _scatter_fit(ax, gx_, gy_, "#7b3294", "similarity to group", "^")
 
-    cross = next((i for i in range(len(x))
-                  if np.isfinite(within[i]) and np.isfinite(group[i])
-                  and within[i] > group[i]), None)
-    if cross is not None:
-        ax.axvline(x[cross], ls=":", color="black", lw=1.5)
-        ax.annotate(f"crossover\n{levels[cross]}", (x[cross], 0.06),
-                    fontsize=8, ha="center",
-                    bbox=dict(boxstyle="round,pad=0.25", fc="white", alpha=0.85))
-    ax.set_xticks(x); ax.set_xticklabels(levels)
+    # Crossover in minutes: where the within and to-group fits meet.
+    if fit_w and fit_g:
+        gx = fit_w[0]
+        diff = fit_w[1] - np.interp(gx, fit_g[0], fit_g[1])
+        idx = np.flatnonzero(diff > 0)
+        if idx.size and idx[0] > 0:
+            xc = gx[idx[0]]
+            ax.axvline(xc, ls=":", color="black", lw=1.5)
+            ax.annotate(f"crossover\n≈{xc:.0f} min", (xc, 0.04), fontsize=8, ha="center",
+                        bbox=dict(boxstyle="round,pad=0.25", fc="white", alpha=0.85))
+        elif idx.size:
+            ax.annotate("within > group\nthroughout", (gx[1], 0.04), fontsize=8)
+    _log_x(ax)
     ax.set_ylim(0, 1.02)
-    ax.set_ylabel("Dice"); ax.set_xlabel("rest data used")
-    ax.set_title(f"A. Individuation (n={n})\nwithin vs between vs group")
-    ax.legend(fontsize=7, loc="upper left"); ax.grid(alpha=0.25)
+    ax.set_ylabel("Dice"); ax.set_xlabel("minutes of rest per map")
+    ax.set_title(f"A. Individuation (n={n})\neach point = one subject at one level")
+    ax.legend(fontsize=7, loc="upper left"); ax.grid(alpha=0.25, which="both")
 
     # --- B: association vs sensorimotor ---------------------------------------
     ax = axes[1]
-    for family, ls in (("association", "-"), ("sensorimotor", "--")):
-        w, _, _ = _comparison_series(results, f"within_{family}")
-        g, _, _ = _comparison_series(results, f"to_group_{family}")
-        b = _between_series(results, family)
-        ax.plot(x, w, ls, marker="o", color=STABLE_COLOR, lw=2, label=f"within · {family}")
-        ax.plot(x, b, ls, marker="s", color="#999999", lw=1.5, label=f"between · {family}")
-        ax.plot(x, g, ls, marker="^", color="#7b3294", lw=1.5, label=f"group · {family}")
-    ax.set_xticks(x); ax.set_xticklabels(levels)
+    for family, marker in (("association", "o"), ("sensorimotor", "^")):
+        x1, y1 = _points(comp, f"within_{family}")
+        _scatter_fit(ax, x1, y1, STABLE_COLOR if family == "association" else "#41ab5d",
+                     f"within · {family}", marker)
+    x2, y2 = _between_points(comp, "association")
+    _scatter_fit(ax, x2, y2, "#999999", "between · association", "s")
+    _log_x(ax)
     ax.set_ylim(0, 1.02)
-    ax.set_ylabel("Dice"); ax.set_xlabel("rest data used")
-    ax.set_title("B. Association vs sensorimotor\n(solid = association, dashed = sensory)")
-    ax.legend(fontsize=6, loc="upper left", ncol=2); ax.grid(alpha=0.25)
+    ax.set_ylabel("Dice"); ax.set_xlabel("minutes of rest per map")
+    ax.set_title("B. Association vs sensorimotor\ndoes one need more data?")
+    ax.legend(fontsize=7, loc="upper left"); ax.grid(alpha=0.25, which="both")
 
     # --- C: identification margin ---------------------------------------------
     ax = axes[2]
-    ident = {r["level"]: r for r in results.get("identification", [])}
-    xc = np.arange(len(config.LEVELS), dtype=float)
-    margin = np.array([ident[lv].get("margin", np.nan) if lv in ident else np.nan
-                       for lv in config.LEVELS], dtype=float)
-    for res in results["subjects"].values():
-        row = [next((m["margin"] for m in res.get("margin", []) if m["level"] == lv),
-                    np.nan) for lv in config.LEVELS]
-        ax.plot(xc, row, color=SIGNAL_COLOR, alpha=0.2, lw=1)
-    ax.plot(xc, margin, "s-", color=SIGNAL_COLOR, lw=2.5, label="mean margin")
+    total = comp.get("total_minutes", {})
+    xs, ys = [], []
+    for sub, res in results["subjects"].items():
+        for row in res.get("margin", []):
+            block = int(row["level"].split("/")[0])
+            if sub in total and row.get("margin") is not None:
+                xs.append(total[sub] * block / config.N_CHUNKS)
+                ys.append(row["margin"])
+    if xs:
+        _scatter_fit(ax, xs, ys, SIGNAL_COLOR, "per subject × level", "s")
+        _log_x(ax)
     ax.axhline(0, ls="--", lw=1, color="gray", label="0 = misidentified")
-    ax.set_xticks(xc); ax.set_xticklabels(config.LEVELS)
-    ax.set_ylabel("margin (correct − best wrong)"); ax.set_xlabel("rest data used")
+    ax.set_ylabel("margin (correct − best wrong)")
+    ax.set_xlabel("minutes of rest per map")
     ax.set_title("C. Identification margin")
-    ax.legend(fontsize=7, loc="upper left"); ax.grid(alpha=0.25)
+    ax.legend(fontsize=7, loc="upper left"); ax.grid(alpha=0.25, which="both")
 
+    if not have_minutes:
+        fig.suptitle("!! no durations recorded — re-run `--stage maps` with BOLD present",
+                     fontsize=10, color="crimson")
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=150)
