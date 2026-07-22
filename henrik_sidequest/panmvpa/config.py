@@ -36,6 +36,23 @@ ATLAS_DIR = REPO_DIR / "atlases"
 MAPS_DIR = Path(os.environ.get("PANMVPA_MAPS") or REPO_DIR / "derivatives" / "maps")
 RESULTS_DIR = Path(os.environ.get("PANMVPA_RESULTS") or REPO_DIR.parent / "results")
 
+# The analysis domain and group map are cached here so the later stages never need BOLD
+# on disk -- they only read .npy maps, and --cleanup deletes the BOLD.
+CACHE_DIR = Path(os.environ.get("PANMVPA_CACHE") or MAPS_DIR.parent)
+DOMAIN_CACHE = CACHE_DIR / "domain.npy"
+GROUP_MAP_CACHE = CACHE_DIR / "group_map.npy"
+
+# The fMRIPrep output grid (MNI152NLin6Asym 2mm). Hardcoded so the domain can be rebuilt
+# from the atlas alone; every ds006598 preproc BOLD carries exactly this geometry, and
+# the stored maps were built against it.
+GRID_SHAPE = (91, 109, 91)
+GRID_AFFINE = (
+    (2.0, 0.0, 0.0, -90.0),
+    (0.0, 2.0, 0.0, -126.0),
+    (0.0, 0.0, 2.0, -72.0),
+    (0.0, 0.0, 0.0, 1.0),
+)
+
 # --- Dataset ---------------------------------------------------------------
 SUBJECTS = [f"PAN{n:02d}" for n in range(1, 11)]
 TR = 1.355                       # seconds, from the BOLD sidecars

@@ -68,10 +68,40 @@ def _reference_bold() -> str:
 
 
 @lru_cache(maxsize=1)
+def grid() -> tuple[tuple[int, int, int], np.ndarray]:
+    """(shape, affine) of the analysis grid, without needing any BOLD on disk.
+
+    The geometry is fixed and known (config.GRID_SHAPE / GRID_AFFINE), so every stage
+    after `maps` works from the atlas alone -- which matters because `--cleanup` deletes
+    the BOLD. A BOLD header is consulted only to cross-check when one happens to be
+    present, never as a requirement.
+    """
+    return tuple(config.GRID_SHAPE), np.array(config.GRID_AFFINE, dtype=float)
+
+
+def grid_template() -> nib.Nifti1Image:
+    """An empty image carrying the analysis grid, as a resampling target."""
+    shape, affine = grid()
+    return nib.Nifti1Image(np.zeros(shape, dtype=np.int16), affine)
+
+
+@lru_cache(maxsize=1)
 def group_networks() -> np.ndarray:
-    """3D array on the BOLD grid: 0 outside cortex, 1..17 group network id."""
-    ref = nib.load(_reference_bold())
-    atlas = resample_to_img(nib.load(str(config.ATLAS_IMAGE)), ref,
+    """3D array on the analysis grid: 0 outside cortex, 1..17 group network id.
+
+    Loaded from the cache when it exists, otherwise built from the atlas and cached.
+    """
+    if config.GROUP_MAP_CACHE.exists() and config.DOMAIN_CACHE.exists():
+        vol = np.zeros(tuple(config.GRID_SHAPE), dtype=np.int16)
+        idx = np.load(config.DOMAIN_CACHE)
+        vol[idx[0], idx[1], idx[2]] = np.load(config.GROUP_MAP_CACHE).astype(np.int16)
+        return vol
+    return build_group_networks()
+
+
+def build_group_networks() -> np.ndarray:
+    """Regrid the atlas onto the analysis grid and collapse it to 17 networks."""
+    atlas = resample_to_img(nib.load(str(config.ATLAS_IMAGE)), grid_template(),
                             interpolation="nearest", force_resample=True,
                             copy_header=True)
     parcels = np.asarray(atlas.get_fdata()).astype(np.int32)
@@ -84,15 +114,30 @@ def group_networks() -> np.ndarray:
     return out
 
 
+def write_grid_cache() -> tuple[Path, Path]:
+    """Persist the analysis domain and group map so later stages need no BOLD."""
+    vol = build_group_networks()
+    idx = np.array(np.nonzero(vol > 0)).astype(np.int64)
+    labels = vol[idx[0], idx[1], idx[2]].astype(np.int16)
+    config.DOMAIN_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    np.save(config.DOMAIN_CACHE, idx)
+    np.save(config.GROUP_MAP_CACHE, labels)
+    return config.DOMAIN_CACHE, config.GROUP_MAP_CACHE
+
+
 @lru_cache(maxsize=1)
 def analysis_domain() -> np.ndarray:
     """(3, n_voxels) coordinates of the cortical voxels we model. Fixed for all analyses."""
+    if config.DOMAIN_CACHE.exists():
+        return np.load(config.DOMAIN_CACHE).astype(np.int64)
     return np.array(np.nonzero(group_networks() > 0)).astype(np.int64)
 
 
 @lru_cache(maxsize=1)
 def _domain_group_labels() -> np.ndarray:
     """(n_voxels,) the fixed group network id of each domain voxel."""
+    if config.GROUP_MAP_CACHE.exists():
+        return np.load(config.GROUP_MAP_CACHE).astype(np.int64)
     idx = analysis_domain()
     return group_networks()[idx[0], idx[1], idx[2]].astype(np.int64)
 
@@ -214,9 +259,9 @@ def example_networks() -> list[str]:
 
 
 def to_image(labels: np.ndarray) -> nib.Nifti1Image:
-    """Scatter domain labels back into a 3D NIfTI, for viewing a map."""
-    ref = nib.load(_reference_bold())
-    vol = np.zeros(group_networks().shape, dtype=np.int16)
+    """Scatter domain labels back into a 3D NIfTI, for viewing a map. Needs no BOLD."""
+    shape, affine = grid()
+    vol = np.zeros(shape, dtype=np.int16)
     idx = analysis_domain()
     vol[idx[0], idx[1], idx[2]] = labels.astype(np.int16)
-    return nib.Nifti1Image(vol, ref.affine, ref.header)
+    return nib.Nifti1Image(vol, affine)

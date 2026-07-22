@@ -55,6 +55,12 @@ def _read(path: Path, default):
 
 # ------------------------------------------------------------------ pass 1: maps
 def stage_maps(subjects, outdir: Path, cleanup: bool) -> None:
+    # Persist the grid now, while BOLD is still around, so `compare`/`identify`/`figure`
+    # never need it -- `--cleanup` will have deleted every scan by the time they run.
+    if not (config.DOMAIN_CACHE.exists() and config.GROUP_MAP_CACHE.exists()):
+        d, g = parcellation.write_grid_cache()
+        print(f"wrote grid cache: {d.name}, {g.name}", flush=True)
+
     store = _read(outdir / "stability.json", {})
     for subject in subjects:
         sid = config.sub_id(subject)
@@ -226,9 +232,16 @@ def stage_compare(subjects, outdir: Path) -> None:
     print("\ncrossover (within-person first exceeds similarity-to-group):")
     for s, c in crossings.items():
         print(f"  {s}: {c if c else 'not within the measured range'}")
+    # Report the distribution rather than a single "most common" level: with few subjects
+    # ties are common, and picking a winner out of a set is order-dependent.
+    order = [config.level_name(b) for b in config.STABILITY_BLOCKS]
     reached = [c for c in crossings.values() if c]
-    print(f"  -> {len(reached)}/{len(have)} subjects cross; "
-          f"most common level: {max(set(reached), key=reached.count) if reached else 'n/a'}")
+    counts = {lv: reached.count(lv) for lv in order if reached.count(lv)}
+    print(f"  -> {len(reached)}/{len(have)} subjects cross"
+          + (f"; by level: {counts}" if counts else ""))
+    if reached:
+        median = sorted(reached, key=order.index)[len(reached) // 2]
+        print(f"  -> median crossover level: {median}")
 
 
 # ----------------------------------------------------------------- stage: figure

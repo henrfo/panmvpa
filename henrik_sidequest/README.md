@@ -121,3 +121,21 @@ plain download (unlink).
 - 15 GB RAM: subjects are processed one at a time and caches are dropped between them.
 - `export TMPDIR=$HOME/tmp` — the overlay filesystem is small.
 - Enable the keepalive plugin (`cmd-shift-C`, search "keep", 24 h) for long runs.
+
+## Grid cache (run this if `compare` says "No BOLD on disk")
+
+`compare`, `identify` and `figure` only read `.npy` maps, but the voxel grid used to be
+derived from a BOLD header — so after `--cleanup` deleted the scans they crashed. The
+grid is now cached:
+
+```bash
+python henrik_sidequest/scripts/build_grid_cache.py --verify-against-maps
+```
+
+This rebuilds the analysis domain and group map **from the atlas alone**, writing
+`derivatives/domain.npy` and `derivatives/group_map.npy`. `--verify-against-maps` checks
+the rebuilt domain size against the maps already on disk before you rely on it.
+
+The `maps` stage writes this cache automatically on first run, so a fresh pipeline never
+hits the problem. The geometry is hardcoded (MNI152NLin6Asym 2mm, 91×109×91) and was
+verified byte-for-byte identical to the BOLD-derived domain.
