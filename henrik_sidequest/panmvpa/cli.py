@@ -1,47 +1,33 @@
-"""End-to-end driver: map stability + subject identification -> group figure + CSV.
+"""Run the pipeline in stages so raw BOLD never all has to be on disk at once.
 
-  Plot 1  DN-A split-half parcellation reliability (Dice)
-  Plot 2  subject identification accuracy from individualised maps (chance = 1/n)
-
-Runs in stages so raw scans never all have to be on disk at once:
-
-  maps      per subject: Dice curve, then build+save every (level, seed) map.
-            Maps are ~260 KB each and persist, so raw rest can be deleted after.
-  identify  per subject: score each held-out task scan against ALL subjects' stored
-            maps. Needs pass 1 finished for every subject -- that is why this cannot be
-            folded into a single pass with cleanup.
-  figure    aggregate the stored results and plot.
+  maps      per subject: build the 8 quarter-combination maps, save them (~260 KB each),
+            and measure stability (pairwise agreement between equal-sized maps).
+  identify  per subject: score every held-out task scan against ALL subjects' cumulative
+            maps. Needs `maps` finished for every subject first -- that is why this cannot
+            be folded into one pass with cleanup.
+  figure    read the saved results and plot.
 
     panmvpa-run --stage maps --cleanup
     panmvpa-run --stage identify --cleanup
     panmvpa-run --stage figure
-    panmvpa-run                         # all three in order
 
-``--cleanup`` deletes a subject's raw BOLD once their results are computed, so disk holds
-one subject at a time (~60 GB) rather than the 0.64 TB cohort.
+``--cleanup`` deletes a subject's raw BOLD once their numbers are computed, so disk holds
+one subject at a time. Everything deleted is re-downloadable from OpenNeuro.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import resource
+import shutil
+import subprocess
 import traceback
+from itertools import combinations
 from pathlib import Path
 
 import numpy as np
-import nibabel as nib
 
-from . import (
-    bold,
-    clear_caches,
-    config,
-    figure,
-    identify,
-    mapstore,
-    parcellation,
-    reliability,
-    rest,
-)
+from . import config, figure, identify, parcellation, rest
 
 
 def _peak_gb() -> float:
@@ -50,8 +36,6 @@ def _peak_gb() -> float:
 
 
 def _write(path: Path, obj) -> None:
-    # allow_nan=False keeps the JSON strict-parser-safe; the FULL sentinel (inf) and any
-    # NaN Dice are written as null and re-read as such.
     def clean(o):
         if isinstance(o, float) and (o != o or o in (float("inf"), float("-inf"))):
             return None
@@ -69,197 +53,166 @@ def _read(path: Path, default):
     return json.loads(path.read_text()) if path.exists() else default
 
 
-# --------------------------------------------------------------------------- pass 1
-def stage_maps(subjects, minutes, n_seeds, outdir: Path, cleanup: bool) -> None:
-    store = _read(outdir / "reliability.json", {})
+# ------------------------------------------------------------------ pass 1: maps
+def stage_maps(subjects, outdir: Path, cleanup: bool) -> None:
+    store = _read(outdir / "stability.json", {})
     for subject in subjects:
         sid = config.sub_id(subject)
         print(f"\n=== [maps] {sid} ===", flush=True)
         try:
-            rel = reliability.reliability_curve(sid, minutes, n_seeds=n_seeds)
-            for r in rel:
-                spare = r.get("spare_runs")
-                if r.get("too_few_runs"):
-                    note = "  <- <2 runs, no split-half possible"
-                elif spare == 0:
-                    note = "  <- no spare runs, 1 seed (all draws identical)"
-                elif spare is not None and spare <= 1 and n_seeds > 1:
-                    note = f"  <- only {spare} spare run(s), seeds near-identical"
+            built: dict[tuple[int, ...], np.ndarray] = {}
+            for quarters in config.MAP_KEYS:
+                if parcellation.has_map(sid, quarters):
+                    built[quarters] = parcellation.load_map(sid, quarters)
                 else:
-                    note = ""
-                dice_txt = ("   n/a" if not np.isfinite(r["dice"])
-                            else f"{r['dice']:.3f}±{r['dice_std']:.3f}")
-                print(f"    {config.level_label(r['minutes']):>5} min | Dice {dice_txt}"
-                      f" | {r['n_seeds']} seeds{note}", flush=True)
-            n_maps = 0
-            for m in minutes:
-                # No spare runs => every seed is the same subset; one map suffices.
-                eff = 1 if rest.sampling_headroom(sid, m).get("spare_runs") == 0 else n_seeds
-                for seed in range(eff):
-                    if mapstore.has_map(sid, m, seed):
-                        n_maps += 1
-                        continue
-                    labels = parcellation.build_parcellation(sid, minutes=m, seed=seed)
-                    mapstore.save_map(labels, sid, m, seed)
-                    n_maps += 1
-            store[sid] = rel
-            _write(outdir / "reliability.json", store)
-            print(f"    saved {n_maps} maps", flush=True)
+                    labels = parcellation.build_map(sid, quarters)
+                    parcellation.save_map(labels, sid, quarters)
+                    built[quarters] = labels
+            print(f"    built {len(built)} maps "
+                  f"({rest.minutes_for(sid, (0,1,2,3)):.0f} min total rest)", flush=True)
+
+            curve = []
+            for level, keys in config.VARIANCE_GROUPS.items():
+                pairs = [parcellation.map_dice(built[a], built[b])
+                         for a, b in combinations(keys, 2)]
+                row = {"level": level, "dice": float(np.mean(pairs)),
+                       "n_pairs": len(pairs),
+                       "minutes": rest.minutes_for(sid, keys[0])}
+                curve.append(row)
+                print(f"    {level} | agreement {row['dice']:.3f} "
+                      f"({row['n_pairs']} pairs, {row['minutes']:.0f} min/map)", flush=True)
+            store[sid] = curve
+            _write(outdir / "stability.json", store)
+
             if cleanup:
-                freed = cleanup_subject(sid, kind="rest")
-                print(f"    cleaned {freed:.1f} GB of rest", flush=True)
+                print(f"    cleaned {cleanup_subject(sid, 'rest'):.1f} GB of rest",
+                      flush=True)
         except Exception as exc:
             print(f"    SKIPPED -- {type(exc).__name__}: {exc}", flush=True)
             traceback.print_exc(limit=1)
         finally:
-            clear_caches()
+            rest.clear_cache()
             print(f"    [peak RSS {_peak_gb():.1f} GB]", flush=True)
 
 
-# --------------------------------------------------------------------------- pass 2
-def stage_identify(subjects, minutes, n_seeds, outdir: Path, cleanup: bool,
-                   size_matched: bool) -> None:
-    # Preload every stored map once: ~260 KB each, so the whole cohort is a few hundred MB
-    # and each held-out scan is read from disk exactly once, not once per level.
-    cohorts: dict[tuple[float, int], dict[str, np.ndarray]] = {}
-    for m in minutes:
-        for seed in range(n_seeds):
-            c = mapstore.load_cohort(m, seed)
-            if len(c) >= 2:
-                cohorts[(m, seed)] = c
+# -------------------------------------------------------------- pass 2: identify
+def stage_identify(subjects, outdir: Path, cleanup: bool) -> None:
+    # Every cumulative map for the whole cohort, loaded once (~260 KB each), so each
+    # held-out scan is read from disk exactly once rather than once per level.
+    cohorts = {lv: parcellation.cohort(q) for lv, q in config.CUMULATIVE.items()}
+    cohorts = {lv: c for lv, c in cohorts.items() if len(c) >= 2}
     if not cohorts:
-        raise SystemExit("No stored maps found -- run `--stage maps` first.")
-    n_sub = max(len(c) for c in cohorts.values())
-    print(f"loaded {len(cohorts)} cohort maps sets, up to {n_sub} subjects each")
+        raise SystemExit("Fewer than two subjects have maps -- run `--stage maps` first.")
+    for lv, c in cohorts.items():
+        print(f"level {lv}: {len(c)} subjects in the lineup")
 
     records = _read(outdir / "identification.json", {})
-    idx = parcellation.analysis_domain()
-
     for subject in subjects:
         sid = config.sub_id(subject)
-        scans = bold.task_scans(sid)
-        print(f"\n=== [identify] {sid} — {len(scans)} held-out task scans ===", flush=True)
+        scans = rest.task_scans(sid)
+        print(f"\n=== [identify] {sid} — {len(scans)} held-out scans ===", flush=True)
         if not scans:
-            print("    none present, skipping", flush=True)
+            print("    none on disk, skipping", flush=True)
             continue
         try:
             for path in scans:
-                arr = np.asarray(nib.load(str(path)).dataobj, dtype=np.float32)
-                ts = arr[idx[0], idx[1], idx[2], :]
-                del arr
-                z = identify._standardize_rows(ts)
-                del ts
-                for (m, seed), maps in cohorts.items():
-                    res = identify.identify_scan(z, maps, sid,
-                                                 size_matched=False, seed=seed)
-                    key = f"{m}|{seed}"
-                    records.setdefault(key, []).append({
-                        "true": res["true"], "predicted": res["predicted"],
-                        "correct": res["correct"], "margin": res["margin"],
-                        "scan": path.name, "task": bold.scan_task_name(path),
-                    })
-                    if size_matched:
-                        rm = identify.identify_scan(z, maps, sid,
-                                                    size_matched=True, seed=seed)
-                        records.setdefault(key + "|sm", []).append({
-                            "true": rm["true"], "predicted": rm["predicted"],
-                            "correct": rm["correct"], "margin": rm["margin"],
-                            "scan": path.name, "task": bold.scan_task_name(path),
-                        })
-                del z
+                ts = rest.load_scan(path)
+                for lv, maps in cohorts.items():
+                    res = identify.identify(ts, maps, sid)
+                    # Chance depends on how many maps were in the lineup, not on how many
+                    # subjects happen to contribute test scans -- record it per scan.
+                    res.update({"scan": path.name, "task": rest.task_name(path),
+                                "n_candidates": len(maps)})
+                    records.setdefault(lv, []).append(res)
+                rest.clear_cache()  # one scan at a time; do not accumulate
             _write(outdir / "identification.json", records)
-            hit = np.mean([r["correct"] for k, v in records.items()
-                           if not k.endswith("|sm") for r in v if r["true"] == sid])
-            print(f"    recall so far for {sid}: {hit:.2f}", flush=True)
+            for lv in cohorts:
+                mine = [r for r in records[lv] if r["true"] == sid]
+                print(f"    {lv}: recall {identify.accuracy(mine):.2f} "
+                      f"over {len(mine)} scans", flush=True)
             if cleanup:
-                freed = cleanup_subject(sid, kind="task")
-                print(f"    cleaned {freed:.1f} GB of task scans", flush=True)
+                print(f"    cleaned {cleanup_subject(sid, 'task'):.1f} GB of task data",
+                      flush=True)
         except Exception as exc:
             print(f"    SKIPPED -- {type(exc).__name__}: {exc}", flush=True)
             traceback.print_exc(limit=1)
         finally:
-            clear_caches()
+            rest.clear_cache()
             print(f"    [peak RSS {_peak_gb():.1f} GB]", flush=True)
 
 
 def cleanup_subject(subject: str, kind: str) -> float:
-    """Delete a subject's raw BOLD after their results are computed. Returns GB freed."""
+    """Delete a subject's raw BOLD once their numbers are in. Returns GB freed.
+
+    A datalad/git-annex clone keeps content as read-only objects behind symlinks, so a
+    plain unlink fails there and we must `git annex drop`. A plain download (the hub) is
+    just files. We detect which and take the matching path.
+    """
     sid = config.sub_id(subject)
-    pattern = f"sub-{sid}/ses-*/func/*_desc-preproc_bold.nii.gz"
-    freed = 0
-    for p in config.DATA_ROOT.glob(pattern):
-        is_rest = "_task-rest_" in p.name
-        if (kind == "rest" and not is_rest) or (kind == "task" and is_rest):
-            continue
-        try:
-            target = p.resolve(strict=True)
-            size = target.stat().st_size
-            target.unlink()          # annex object
-            p.unlink(missing_ok=True)  # and the symlink/file itself
-            freed += size
-        except (FileNotFoundError, OSError):
-            continue
+    root = config.DATA_ROOT
+    paths = [p for p in root.glob(f"sub-{sid}/ses-*/func/*_desc-preproc_bold.nii.gz")
+             if (f"_task-{config.REST_TASK}_" in p.name) == (kind == "rest")]
+    if not paths:
+        return 0.0
+
+    freed = 0.0
+    if (root / ".git" / "annex").exists() and shutil.which("git-annex"):
+        rels = []
+        for p in paths:
+            try:
+                freed += p.resolve(strict=True).stat().st_size
+                rels.append(str(p.relative_to(root)))
+            except (FileNotFoundError, OSError):
+                continue
+        if rels:
+            subprocess.run(["git", "-C", str(root), "annex", "drop", "--force", *rels],
+                           capture_output=True)
+    else:
+        for p in paths:
+            try:
+                freed += p.stat().st_size
+                p.unlink()
+            except (FileNotFoundError, OSError):
+                continue
     return freed / 1e9
 
 
-# --------------------------------------------------------------------------- figure
-def stage_figure(minutes, n_seeds, outdir: Path) -> None:
-    rel = _read(outdir / "reliability.json", {})
+# ----------------------------------------------------------------- stage: figure
+def stage_figure(outdir: Path) -> None:
+    stability = _read(outdir / "stability.json", {})
     ident = _read(outdir / "identification.json", {})
-    if not rel:
-        raise SystemExit("No reliability results -- run `--stage maps` first.")
+    if not stability:
+        raise SystemExit("No stability results -- run `--stage maps` first.")
 
-    results = {"minutes": minutes, "n_seeds": n_seeds,
-               "subjects": {s: {"reliability": v} for s, v in rel.items()}}
+    results = {"subjects": {s: {"stability": v} for s, v in stability.items()}}
+    # Chance = 1 / number of candidate maps the scan was scored against.
+    lineup = max((r.get("n_candidates", 0) for v in ident.values() for r in v), default=0)
+    results["chance"] = 1.0 / lineup if lineup else float("nan")
+    results["identification"] = [
+        {"level": lv, "accuracy": identify.accuracy(ident[lv]),
+         "n_scans": len(ident[lv]),
+         "n_subjects": len({r["true"] for r in ident[lv]}),
+         "n_candidates": max((r.get("n_candidates", 0) for r in ident[lv]), default=0)}
+        for lv in config.LEVELS if ident.get(lv)
+    ]
 
-    ident_curve = []
-    for m in minutes:
-        accs, sms = [], []
-        for seed in range(n_seeds):
-            recs = ident.get(f"{m}|{seed}")
-            if recs:
-                accs.append(identify.accuracy(recs))
-            sm = ident.get(f"{m}|{seed}|sm")
-            if sm:
-                sms.append(identify.accuracy(sm))
-        n_scans = len(ident.get(f"{m}|0", []))
-        ident_curve.append({
-            "minutes": m,
-            "accuracy": float(np.mean(accs)) if accs else float("nan"),
-            "accuracy_std": float(np.std(accs, ddof=1)) if len(accs) > 1 else 0.0,
-            "accuracy_size_matched": float(np.mean(sms)) if sms else float("nan"),
-            "n_scans": n_scans,
-            "n_seeds": len(accs),
-        })
-    results["identification"] = ident_curve
-    n_sub = len({r["true"] for v in ident.values() for r in v}) if ident else len(rel)
-    results["chance"] = 1.0 / max(n_sub, 1)
-
-    figure.save_group_csv(results, outdir / "group_curves.csv")
-    figure.plot_group(results, outdir / "group_figure.png")
-    _write(outdir / "group_results.json", results)
-    print(f"\nfigure -> {outdir / 'group_figure.png'}")
-    print(f"csv    -> {outdir / 'group_curves.csv'}")
-    for row in ident_curve:
-        print(f"  {row['minutes']:>4.0f} min | identification "
-              f"{row['accuracy']:.3f}±{row['accuracy_std']:.3f} "
-              f"(size-matched {row['accuracy_size_matched']:.3f}) "
-              f"| {row['n_scans']} scans, chance {results['chance']:.2f}")
+    figure.save_csv(results, outdir / "curves.csv")
+    figure.plot(results, outdir / "figure.png")
+    _write(outdir / "results.json", results)
+    print(f"\nfigure -> {outdir / 'figure.png'}")
+    print(f"csv    -> {outdir / 'curves.csv'}")
+    for row in results["identification"]:
+        print(f"  {row['level']} | identification {row['accuracy']:.3f} "
+              f"({row['n_scans']} scans, chance {results['chance']:.2f})")
 
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--subjects", nargs="+", default=config.SUBJECTS)
-    ap.add_argument("--minutes", type=float, nargs="+", default=config.MINUTE_LEVELS)
     ap.add_argument("--outdir", default=str(config.RESULTS_DIR))
-    ap.add_argument("--n-seeds", type=int, default=10,
-                    help="random run-subsets per subject per level (default 10)")
-    ap.add_argument("--stage", choices=["maps", "identify", "figure", "all"],
-                    default="all")
+    ap.add_argument("--stage", choices=["maps", "identify", "figure", "all"], default="all")
     ap.add_argument("--cleanup", action="store_true",
-                    help="delete a subject's raw BOLD once their results are computed")
-    ap.add_argument("--no-size-matched", action="store_true",
-                    help="skip the size-matched identification control (halves pass-2 cost)")
+                    help="delete a subject's raw BOLD once their numbers are computed")
     return ap
 
 
@@ -267,22 +220,20 @@ def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    minutes = list(args.minutes)
     subjects = [config.sub_id(s) for s in args.subjects]
 
     print(f"data:    {config.DATA_ROOT}")
+    print(f"maps:    {config.MAPS_DIR}")
     print(f"results: {outdir}")
-    print(f"levels:  {minutes} min | seeds: {args.n_seeds} | stage: {args.stage}")
     if args.cleanup:
         print("cleanup: ON -- raw BOLD is deleted after each subject")
 
     if args.stage in ("maps", "all"):
-        stage_maps(subjects, minutes, args.n_seeds, outdir, args.cleanup)
+        stage_maps(subjects, outdir, args.cleanup)
     if args.stage in ("identify", "all"):
-        stage_identify(subjects, minutes, args.n_seeds, outdir, args.cleanup,
-                       size_matched=not args.no_size_matched)
+        stage_identify(subjects, outdir, args.cleanup)
     if args.stage in ("figure", "all"):
-        stage_figure(minutes, args.n_seeds, outdir)
+        stage_figure(outdir)
 
 
 if __name__ == "__main__":

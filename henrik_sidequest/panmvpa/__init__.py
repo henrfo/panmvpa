@@ -1,85 +1,36 @@
-"""panmvpa — plumbing for the PAN precision-fMRI MVPA sidequest.
+"""panmvpa — how much rest data does a personal brain map need?
+
+Stable = equal-sized maps agree with each other. Useful = the map identifies whose brain
+a held-out scan came from.
 
     import panmvpa
-    sessions = panmvpa.epiproj_sessions("PAN01")
-    events = panmvpa.build_events("PAN01", sessions[0])
-    img = panmvpa.load_bold("PAN01", sessions[0])
+    panmvpa.build_map("PAN01", (0, 1))      # map from the first half of the rest data
+    panmvpa.map_dice(map_a, map_b)          # agreement between two maps
 """
 from __future__ import annotations
 
-from . import (
-    atlases,
-    bold,
-    cnr,
-    identify,
-    mapstore,
-    config,
-    events,
-    figure,
-    glm,
-    mvpa,
-    parcellation,
-    reliability,
-    rest,
-)
-from .cnr import cnr_curve
-from .bold import find_bold, is_fetched, load_bold
-from .config import CONDITIONS, CONTRASTS, MINUTE_LEVELS, SUBJECTS, TASK, TR
-from .events import build_events, epiproj_sessions, parse_1d_file
-from .mvpa import complete_sessions, decoding_curve
-from .parcellation import build_parcellation, dn_a_mask
-from .reliability import reliability_curve
-from .rest import rest_runs, select_runs
-
-
-def clear_caches() -> None:
-    """Free every per-subject cache (rest timeseries, GLM betas/z-maps).
-
-    ``run_all.py`` calls this between subjects so peak memory tracks one subject rather
-    than the whole cohort -- the 15 GB hub cannot hold 10 subjects' timeseries at once.
-    """
-    import gc
-
-    rest.clear_cache()
-    glm.task_beta.cache_clear()
-    glm.task_zmap.cache_clear()
-    cnr.epiproj_zmaps.cache_clear()
-    mvpa.decoding_betas.cache_clear()
-    gc.collect()  # cache_clear only drops references; collect actually reclaims
+from . import config, figure, identify, parcellation, rest
+from .config import LEVELS, SUBJECTS
+from .identify import identify as identify_scan
+from .identify import network_homogeneity
+from .parcellation import build_map, load_map, map_dice, save_map
+from .rest import quarters, rest_runs, task_scans
 
 __all__ = [
     "config",
-    "events",
-    "bold",
-    "atlases",
     "rest",
     "parcellation",
-    "reliability",
-    "glm",
-    "cnr",
     "identify",
-    "mapstore",
-    "mvpa",
     "figure",
     "SUBJECTS",
-    "TASK",
-    "TR",
-    "CONDITIONS",
-    "CONTRASTS",
-    "MINUTE_LEVELS",
-    "parse_1d_file",
-    "build_events",
-    "epiproj_sessions",
-    "find_bold",
-    "load_bold",
-    "is_fetched",
+    "LEVELS",
     "rest_runs",
-    "select_runs",
-    "build_parcellation",
-    "dn_a_mask",
-    "reliability_curve",
-    "cnr_curve",
-    "decoding_curve",
-    "complete_sessions",
-    "clear_caches",
+    "task_scans",
+    "quarters",
+    "build_map",
+    "save_map",
+    "load_map",
+    "map_dice",
+    "network_homogeneity",
+    "identify_scan",
 ]

@@ -1,7 +1,22 @@
-"""Paths and constants for the PAN-MVPA sidequest.
+"""Paths, subjects, and the deterministic data-level design.
 
-Dataset facts verified against the ds006598 S3 listing (2026-07-20). Durations confirmed
-from the paper's STAR Methods.
+How much resting-state data do you need before a personal brain map is stable (gives the
+same answer every time) and useful (identifies whose brain it is)?
+
+Data levels are deterministic -- no random seeds. Each subject's rest runs are taken in
+order and split into four equal quarters, and we build eight maps:
+
+    Q1, Q2, Q3, Q4          four independent maps from a quarter of the data each
+    Q1+Q2, Q3+Q4            two independent maps from half the data each
+    Q1+Q2+Q3                three quarters
+    Q1+Q2+Q3+Q4             everything
+
+VARIANCE (plot 1) compares maps built from the *same* amount of data: the four quarter
+maps (6 pairs) and the two half maps (1 pair). Three-quarter and full are single maps, so
+they have no pair and no variance point.
+
+SIGNAL (plot 2) uses the *cumulative* maps -- Q1, Q1+Q2, Q1+Q2+Q3, all -- at all four
+levels.
 """
 from __future__ import annotations
 
@@ -12,146 +27,66 @@ from pathlib import Path
 PKG_DIR = Path(__file__).resolve().parent
 REPO_DIR = PKG_DIR.parent  # henrik_sidequest/
 
-# Dataset location. Set DATA_DIR (or PANMVPA_DATA) to your clone of ds006598 so the same
-# code runs locally and on a JupyterHub without editing anything. Falls back to the
-# in-repo clone used during local development.
+# Set DATA_DIR to the ds006598 root so the same code runs locally and on a hub.
 DATA_ROOT = Path(
-    os.environ.get("DATA_DIR")
-    or os.environ.get("PANMVPA_DATA")
+    os.environ.get("DATA_DIR") or os.environ.get("PANMVPA_DATA")
     or REPO_DIR / "data" / "ds006598"
 )
-
-ATLAS_DIR = REPO_DIR / "atlases"       # downloaded template atlases live here
-DERIV_ROOT = REPO_DIR / "derivatives"  # scratch/derived outputs (gitignored)
-
-# Figures + CSVs that we DO want in git, so hub results can be pulled back locally.
+ATLAS_DIR = REPO_DIR / "atlases"
+MAPS_DIR = Path(os.environ.get("PANMVPA_MAPS") or REPO_DIR / "derivatives" / "maps")
 RESULTS_DIR = Path(os.environ.get("PANMVPA_RESULTS") or REPO_DIR.parent / "results")
 
-# --- Subjects --------------------------------------------------------------
-SUBJECTS = [f"PAN{n:02d}" for n in range(1, 11)]  # PAN01 .. PAN10
-
-# --- Acquisition -----------------------------------------------------------
-TR = 1.355  # seconds, from *_bold.json RepetitionTime
-SPACE = "MNI152NLin6Asym_res-2"
-
-# --- Resting state (parcellation input) -----------------------------------
+# --- Dataset ---------------------------------------------------------------
+SUBJECTS = [f"PAN{n:02d}" for n in range(1, 11)]
+TR = 1.355                       # seconds, from the BOLD sidecars
+SPACE = "MNI152NLin6Asym_res-2"  # preprocessed fMRIPrep output space
 REST_TASK = "rest"
-# Each PAN rest run is 222 volumes ~= 5.01 min. The reliability/decoding x-axis
-# is minutes of rest; we concatenate whole runs up to each target.
-# Numeric levels stop at 100 min so every subject contributes at each of them (PAN03 and
-# PAN05 have only ~105 min of rest, PAN07 ~115). FULL is a sentinel meaning "all the rest
-# this subject has", which differs per subject (105-165 min) and so is plotted as a
-# trailing categorical tick rather than at a numeric x position.
-FULL = float("inf")
-MINUTE_LEVELS = [5, 10, 20, 40, 60, 80, 100, FULL]
 
-
-def is_full(minutes: float) -> bool:
-    return minutes == FULL
-
-
-def level_label(minutes: float) -> str:
-    """Human label for a data level: 'Full' or e.g. '40'."""
-    return "Full" if is_full(minutes) else f"{minutes:g}"
-
-
-def level_key(minutes: float) -> str:
-    """Filename-safe key for a data level: 'full' or e.g. '040'."""
-    return "full" if is_full(minutes) else f"{int(round(minutes)):03d}"
-
-# --- Group reference parcellation -----------------------------------------
-# The Yeo-Krienen 17-network taxonomy, realised via Schaefer-400 (its parcels ARE
-# labelled by the 17 networks) in FSL-MNI152 2mm. This is the FIXED group anchor:
-# it defines the 17 seed regions used to derive reference timeseries at every data
-# level. Only voxel allegiance is individualised, never these region definitions.
-SCHAEFER_ATLAS = ATLAS_DIR / "schaefer_2018" / (
+# --- Group atlas -----------------------------------------------------------
+# The Yeo-17 network taxonomy, realised via Schaefer-400 (its parcels are labelled by the
+# Yeo-Krienen 17 networks) because that ships already in FSL-MNI152 2mm -- the same space
+# family as the BOLD -- so it only needs a nearest-neighbour regrid, not a cross-space
+# resample. Collapsing its 400 parcels by network label gives the 17 group regions.
+ATLAS_IMAGE = ATLAS_DIR / "schaefer_2018" / (
     "Schaefer2018_400Parcels_17Networks_order_FSLMNI152_2mm.nii.gz"
 )
-SCHAEFER_ORDER = ATLAS_DIR / "schaefer_2018" / "Schaefer2018_400Parcels_17Networks_order.txt"
+ATLAS_ORDER = ATLAS_DIR / "schaefer_2018" / "Schaefer2018_400Parcels_17Networks_order.txt"
 N_NETWORKS = 17
-# DN-A := Yeo-17 DefaultC (retrosplenial / parahippocampal / dorsal PCC).
-DN_A_NETWORK = "DefaultC"
 
-# --- Episodic Projection task ---------------------------------------------
-TASK = "epiproj"
+# --- Data levels -----------------------------------------------------------
+N_QUARTERS = 4
 
-CONDITIONS = [
-    "pastself",
-    "presentself",
-    "futureself",
-    "pastnonself",
-    "presentnonself",
-    "futurenonself",
+# Maps built per subject, keyed by the quarters they use (0-indexed).
+MAP_KEYS: list[tuple[int, ...]] = [
+    (0,), (1,), (2,), (3,),      # quarter-sized
+    (0, 1), (2, 3),              # half-sized
+    (0, 1, 2),                   # three quarters
+    (0, 1, 2, 3),                # everything
 ]
 
-# STAR Methods: each block is 20 s (5 s fixation + 10 s trial + 5 s fixation).
-# We model the 10 s active trial period, not the full block.
-EVENT_DURATION = 10.0
-
-# Only ~6 epiproj runs exist per subject, spread across sessions. Never assume a
-# session has epiproj — discover it (see events.epiproj_sessions).
-
-CONTRASTS = {
-    "retrospection": ("pastself", "presentself"),   # past vs present self
-    "prospection": ("futureself", "presentself"),   # future vs present self
+# Plot 1: groups of equal-sized maps to compare against each other.
+VARIANCE_GROUPS: dict[str, list[tuple[int, ...]]] = {
+    "1/4": [(0,), (1,), (2,), (3,)],
+    "2/4": [(0, 1), (2, 3)],
 }
 
-# --- Task-decoding (Plot 2) -----------------------------------------------
-# 4-class problem: which task is being performed, decoded from the DN-A pattern.
-# Each class beta = mean of its sub-task betas that are present in a session
-# (sub-tasks are averaged when both exist, otherwise the one present is used).
-# Block durations (s) are from the paper's STAR Methods.
-TASK_DURATIONS = {
-    "langlocaud": 18.0,
-    "langlocvis": 18.0,
-    "tomfalse": 15.0,   # 10 s story + 5 s response
-    "tompain": 15.0,
-    "epiproj": 10.0,
-    "msit": 42.0,
-    "spatialwm": 34.0,
+# Plot 2: the cumulative map at each level.
+CUMULATIVE: dict[str, tuple[int, ...]] = {
+    "1/4": (0,),
+    "2/4": (0, 1),
+    "3/4": (0, 1, 2),
+    "4/4": (0, 1, 2, 3),
 }
 
-# Class label = insertion order (language=0, tom=1, epiproj=2, control=3).
-DECODING_FAMILIES = {
-    "language": ["langlocaud", "langlocvis"],
-    "tom": ["tomfalse", "tompain"],
-    "epiproj": ["epiproj"],
-    "control": ["msit"],
-}
+LEVELS = ["1/4", "2/4", "3/4", "4/4"]  # shared x-axis
 
 
-# --- Path helpers ----------------------------------------------------------
+def map_key(quarters: tuple[int, ...]) -> str:
+    """(0,1) -> 'q01'  — filename-safe id for a map."""
+    return "q" + "".join(str(q) for q in quarters)
+
+
 def sub_id(subject: str) -> str:
     """Normalise 'PAN01', 'sub-PAN01', or '01' -> 'PAN01'."""
     s = subject.removeprefix("sub-").removeprefix("PAN")
     return f"PAN{s}"
-
-
-def bold_path(subject: str, session: int, task: str = TASK) -> Path:
-    """Preprocessed BOLD for one subject/session/task."""
-    sid = sub_id(subject)
-    fname = f"sub-{sid}_ses-{session}_task-{task}_space-{SPACE}_desc-preproc_bold.nii.gz"
-    return DATA_ROOT / f"sub-{sid}" / f"ses-{session}" / "func" / fname
-
-
-def rest_glob(subject: str) -> str:
-    """Glob (relative to DATA_ROOT) matching every preproc rest BOLD run for a subject."""
-    sid = sub_id(subject)
-    return (
-        f"sub-{sid}/ses-*/func/"
-        f"sub-{sid}_ses-*_task-{REST_TASK}_run-*_space-{SPACE}_desc-preproc_bold.nii.gz"
-    )
-
-
-def afni_timing_path(subject: str, session: int, condition: str, task: str = TASK) -> Path:
-    """AFNI .1D onset file for one subject/session/condition."""
-    sid = sub_id(subject)
-    fname = f"sub-{sid}_ses-{session}_task-{task}_{condition}.1D"
-    return DATA_ROOT / "derivatives" / "afni_timing" / sid / fname
-
-
-def task_timing_files(subject: str, session: int, task: str) -> list[Path]:
-    """All AFNI .1D condition files for one subject/session/task (any condition)."""
-    sid = sub_id(subject)
-    timing_dir = DATA_ROOT / "derivatives" / "afni_timing" / sid
-    return sorted(timing_dir.glob(f"sub-{sid}_ses-{session}_task-{task}_*.1D"))
