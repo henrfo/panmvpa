@@ -297,7 +297,11 @@ def slope_report(comp: dict, threshold: float = 0.01) -> dict:
             continue
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
-        fds = finite_differences(*_bin_by_x(xs, ys))
+        # Finite differences must be taken WITHIN a subject and then averaged. Pooling
+        # subjects into one sorted series and differencing consecutive entries hops
+        # between people at interleaved durations and produces alternating nonsense.
+        fds = _mean_within_subject_fds(per_subject, field) if field != "between" \
+            else finite_differences(*_bin_by_x(xs, ys))
         entry = {"slope": log_slope(xs, ys), "finite_differences": fds,
                  "finite_differences_decline": declining(fds)}
         if entry["finite_differences_decline"]:
@@ -325,3 +329,28 @@ def _bin_by_x(xs, ys, decimals: int = 3):
     y = np.asarray(ys, float)
     uniq = np.unique(x)
     return uniq.tolist(), [float(np.nanmean(y[x == u])) for u in uniq]
+
+
+def _mean_within_subject_fds(per_subject: dict, field: str) -> list[dict]:
+    """Average each subject's own finite differences, matched by data level.
+
+    Subjects sit at different durations, so we key by level index rather than by minutes
+    and report the mean midpoint. This keeps every difference within one subject.
+    """
+    by_index: dict[int, list[dict]] = {}
+    for entry in per_subject.values():
+        for i, fd in enumerate(entry.get(field, {}).get("finite_differences", [])):
+            by_index.setdefault(i, []).append(fd)
+    out = []
+    for i in sorted(by_index):
+        group = by_index[i]
+        slopes = [f["slope"] for f in group]
+        out.append({
+            "mid_minutes": float(np.mean([f["mid_minutes"] for f in group])),
+            "slope": float(np.mean(slopes)),
+            "sem": float(np.std(slopes, ddof=1) / np.sqrt(len(slopes)))
+            if len(slopes) > 1 else 0.0,
+            "per_doubling": float(np.mean([f["per_doubling"] for f in group])),
+            "n_subjects": len(group),
+        })
+    return out

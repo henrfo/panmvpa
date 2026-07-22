@@ -365,8 +365,19 @@ def main(argv: list[str] | None = None) -> None:
     subjects = [config.sub_id(s) for s in args.subjects]
 
     print(f"data:    {config.DATA_ROOT}")
-    print(f"maps:    {config.MAPS_DIR}")
+    print(f"maps:    {config.MAPS_DIR}   (version {config.MAP_VERSION})")
     print(f"results: {outdir}")
+
+    # Maps used to live unversioned in derivatives/maps. If a previous run's maps are
+    # sitting there, say so rather than silently building a fresh empty version.
+    versioned = list(config.MAPS_DIR.glob("*.npy")) if config.MAPS_DIR.exists() else []
+    legacy = list(config.legacy_maps_dir().glob("*.npy"))
+    if legacy and not versioned:
+        print(f"\n!! {len(legacy)} unversioned maps found in {config.legacy_maps_dir()}")
+        print(f"   Move them into the versioned folder to use them:")
+        print(f"     mkdir -p {config.MAPS_DIR} && "
+              f"mv {config.legacy_maps_dir()}/*.npy {config.MAPS_DIR}/")
+        print(f"   (or point PANMVPA_MAPS at them)\n")
     if args.cleanup:
         print("cleanup: ON -- raw BOLD is deleted after each subject")
 

@@ -33,12 +33,25 @@ DATA_ROOT = Path(
     or REPO_DIR / "data" / "ds006598"
 )
 ATLAS_DIR = REPO_DIR / "atlases"
-MAPS_DIR = Path(os.environ.get("PANMVPA_MAPS") or REPO_DIR / "derivatives" / "maps")
-RESULTS_DIR = Path(os.environ.get("PANMVPA_RESULTS") or REPO_DIR / "results")
+DERIV_DIR = REPO_DIR / "derivatives"
 
-# The analysis domain and group map are cached here so the later stages never need BOLD
-# on disk -- they only read .npy maps, and --cleanup deletes the BOLD.
-CACHE_DIR = Path(os.environ.get("PANMVPA_CACHE") or MAPS_DIR.parent)
+# Maps and results are versioned. A design change should write to a NEW folder rather
+# than silently overwrite the last run, so old and new can be compared instead of one
+# being lost. Bump this (or set PANMVPA_VERSION) whenever the map design changes --
+# chunking, atlas, WTA, anything that alters what a map means.
+MAP_VERSION = os.environ.get("PANMVPA_VERSION", "v1")
+
+MAPS_DIR = Path(os.environ.get("PANMVPA_MAPS") or DERIV_DIR / "maps" / MAP_VERSION)
+RESULTS_DIR = Path(os.environ.get("PANMVPA_RESULTS") or REPO_DIR / "results" / MAP_VERSION)
+
+# The grid is a property of the atlas, not of a map design, so it is shared across
+# versions rather than rebuilt per version.
+CACHE_DIR = Path(os.environ.get("PANMVPA_CACHE") or DERIV_DIR)
+
+
+def legacy_maps_dir() -> Path:
+    """Where unversioned maps from before this change would sit."""
+    return DERIV_DIR / "maps"
 DOMAIN_CACHE = CACHE_DIR / "domain.npy"
 GROUP_MAP_CACHE = CACHE_DIR / "group_map.npy"
 

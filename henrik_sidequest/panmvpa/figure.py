@@ -324,6 +324,54 @@ def _faint_then_mean(ax, curves, color, label, lw=2.6):
     return got
 
 
+def _fd_series(comp: dict, field: str):
+    """Per-subject finite differences dy/dlog(x): {mid_minutes: [slopes across subjects]}."""
+    from . import compare as _cmp
+    buckets: dict[float, list[float]] = {}
+    for res in comp.get("per_subject", {}).values():
+        rows = [r for r in res.get("levels", []) if r.get("minutes")
+                and r.get(field) is not None]
+        if len(rows) < 2:
+            continue
+        fds = _cmp.finite_differences([r["minutes"] for r in rows],
+                                      [r[field] for r in rows])
+        for f in fds:
+            buckets.setdefault(round(f["mid_minutes"], 3), []).append(f["slope"])
+    return buckets
+
+
+def _fd_between(comp: dict):
+    """Finite differences of the between-person null, pooled per level."""
+    from . import compare as _cmp
+    by_level: dict[str, list] = {}
+    mins: dict[str, list] = {}
+    for rec in comp.get("between_pairs", []):
+        if rec.get("minutes") and rec.get("dice") is not None:
+            by_level.setdefault(rec["level"], []).append(rec["dice"])
+            mins.setdefault(rec["level"], []).append(rec["minutes"])
+    levels = [config.level_name(b) for b in config.STABILITY_BLOCKS if b and
+              config.level_name(b) in by_level]
+    if len(levels) < 2:
+        return {}
+    x = [float(np.mean(mins[lv])) for lv in levels]
+    y = [float(np.mean(by_level[lv])) for lv in levels]
+    return {round(f["mid_minutes"], 3): [f["slope"]]
+            for f in _cmp.finite_differences(x, y)}
+
+
+def _plot_fd(ax, buckets, color, label, marker="o"):
+    """Mean +/- SEM of the finite differences across subjects, at each midpoint."""
+    if not buckets:
+        return None
+    xs = sorted(buckets)
+    means = [float(np.mean(buckets[x])) for x in xs]
+    sems = [float(np.std(buckets[x], ddof=1) / np.sqrt(len(buckets[x])))
+            if len(buckets[x]) > 1 else 0.0 for x in xs]
+    ax.errorbar(xs, means, yerr=sems, marker=marker, color=color, lw=2, capsize=3,
+                label=label)
+    return xs, means
+
+
 def plot_comparisons(results: dict, path: Path) -> None:
     """Five panels on a linear minutes axis.
 
@@ -336,7 +384,7 @@ def plot_comparisons(results: dict, path: Path) -> None:
     n = len(comp["per_subject"])
     names = comp.get("networks", [])
 
-    fig, axes = plt.subplots(2, 3, figsize=(17, 9))
+    fig, axes = plt.subplots(2, 4, figsize=(22, 9))
     axes = axes.ravel()
 
     # --- A: individuation, every subject faint --------------------------------
@@ -436,8 +484,36 @@ def plot_comparisons(results: dict, path: Path) -> None:
         ax.set_title("E. Which networks individuate most\n(green = association, blue = sensorimotor)")
         ax.grid(alpha=0.25, axis="x")
 
-    # --- F: identification margin --------------------------------------------
+    # --- F: THE derivative panel ---------------------------------------------
+    # If within-person finite differences stay flat while similarity-to-group's decline,
+    # the two are not offset versions of one curve -- they are different shapes. Group
+    # similarity saturates; individuation does not. That is the core claim.
     ax = axes[5]
+    fd_w = _fd_series(comp, "within")
+    fd_g = _fd_series(comp, "to_group")
+    fd_b = _fd_between(comp)
+    _plot_fd(ax, fd_w, STABLE_COLOR, "within-person", "o")
+    _plot_fd(ax, fd_b, "#999999", "between-person", "s")
+    _plot_fd(ax, fd_g, "#7b3294", "similarity to group", "^")
+    ax.axhline(0, ls="--", lw=1, color="gray")
+    ax.set_ylabel("d(Dice) / d log(minutes)")
+    ax.set_xlabel("minutes of rest per map (midpoint)")
+    ax.set_title("F. Are the gains slowing?\nflat = still improving, falling = saturating")
+    ax.legend(fontsize=8, loc="upper right"); ax.grid(alpha=0.25)
+
+    # Say plainly whether the individual signal is exhausted at the most data we have.
+    if fd_w:
+        last_x = max(fd_w)
+        last = float(np.mean(fd_w[last_x]))
+        first = float(np.mean(fd_w[min(fd_w)]))
+        verdict = ("still rising at the most data\n(individual signal NOT exhausted)"
+                   if last > 0.5 * first and last > 0 else "flattening")
+        ax.annotate(f"within-person: {verdict}", (0.03, 0.04), xycoords="axes fraction",
+                    fontsize=7.5, bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                                            alpha=0.85))
+
+    # --- G: identification margin --------------------------------------------
+    ax = axes[6]
     total = comp.get("total_minutes", {})
     curves = []
     for sub, res in results["subjects"].items():
@@ -451,9 +527,10 @@ def plot_comparisons(results: dict, path: Path) -> None:
     ax.axhline(0, ls="--", lw=1, color="gray")
     ax.set_ylabel("margin (correct − best wrong)")
     ax.set_xlabel("minutes of rest per map")
-    ax.set_title("F. Identification margin")
+    ax.set_title("G. Identification margin")
     ax.legend(fontsize=8, loc="upper left"); ax.grid(alpha=0.25)
 
+    axes[7].axis("off")
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=150)
