@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import config, figure, identify, parcellation, rest
+from . import compare, config, figure, identify, parcellation, rest
 
 
 def _peak_gb() -> float:
@@ -60,27 +60,46 @@ def stage_maps(subjects, outdir: Path, cleanup: bool) -> None:
         sid = config.sub_id(subject)
         print(f"\n=== [maps] {sid} ===", flush=True)
         try:
-            built: dict[tuple[int, ...], np.ndarray] = {}
-            for quarters in config.MAP_KEYS:
-                if parcellation.has_map(sid, quarters):
-                    built[quarters] = parcellation.load_map(sid, quarters)
+            built: dict[tuple[int, int], np.ndarray] = {}
+            for spec in config.map_specs():
+                if parcellation.has_map(sid, spec):
+                    built[spec] = parcellation.load_map(sid, spec)
                 else:
-                    labels = parcellation.build_map(sid, quarters)
-                    parcellation.save_map(labels, sid, quarters)
-                    built[quarters] = labels
-            print(f"    built {len(built)} maps "
-                  f"({rest.minutes_for(sid, (0,1,2,3)):.0f} min total rest)", flush=True)
+                    labels = parcellation.build_map(sid, spec)
+                    parcellation.save_map(labels, sid, spec)
+                    built[spec] = labels
+            total_min = rest.minutes_for(sid, (0, config.N_CHUNKS))
+            print(f"    built {len(built)} maps ({total_min:.0f} min total rest)",
+                  flush=True)
 
+            names = parcellation.network_order()
             curve = []
-            for level, keys in config.VARIANCE_GROUPS.items():
-                pairs = [parcellation.map_dice(built[a], built[b])
-                         for a, b in combinations(keys, 2)]
-                row = {"level": level, "dice": float(np.mean(pairs)),
-                       "n_pairs": len(pairs),
-                       "minutes": rest.minutes_for(sid, keys[0])}
+            for block in config.STABILITY_BLOCKS:
+                pairs = config.stability_pairs(block)
+                per_net = np.array([parcellation.dice_per_network(built[a], built[b])
+                                    for a, b in pairs])            # (n_pairs, 17)
+                mean_per_net = np.nanmean(per_net, axis=0)
+                # Runs don't always divide evenly into 16 chunks, so the two maps in a
+                # pair can hold slightly different amounts of data. Record the spread so
+                # an imbalanced comparison is visible rather than silently averaged in.
+                mins = [rest.minutes_for(sid, m) for pair in pairs for m in pair]
+                row = {
+                    "level": config.level_name(block),
+                    "dice": float(np.nanmean(mean_per_net)),
+                    "dice_per_network": {names[i]: float(mean_per_net[i])
+                                         for i in range(config.N_NETWORKS)},
+                    "n_pairs": len(pairs),
+                    "minutes": float(np.mean(mins)),
+                    "minutes_min": float(np.min(mins)),
+                    "minutes_max": float(np.max(mins)),
+                }
                 curve.append(row)
-                print(f"    {level} | agreement {row['dice']:.3f} "
-                      f"({row['n_pairs']} pairs, {row['minutes']:.0f} min/map)", flush=True)
+                spread = ("" if row["minutes_max"] - row["minutes_min"] < 0.1
+                          else f"  <- maps span {row['minutes_min']:.0f}-"
+                               f"{row['minutes_max']:.0f} min, not equal")
+                print(f"    {row['level']:>5} | agreement {row['dice']:.3f} "
+                      f"({row['n_pairs']} pairs, {row['minutes']:.0f} min/map){spread}",
+                      flush=True)
             store[sid] = curve
             _write(outdir / "stability.json", store)
 
@@ -99,7 +118,8 @@ def stage_maps(subjects, outdir: Path, cleanup: bool) -> None:
 def stage_identify(subjects, outdir: Path, cleanup: bool) -> None:
     # Every cumulative map for the whole cohort, loaded once (~260 KB each), so each
     # held-out scan is read from disk exactly once rather than once per level.
-    cohorts = {lv: parcellation.cohort(q) for lv, q in config.CUMULATIVE.items()}
+    cohorts = {config.level_name(b): parcellation.cohort((0, b))
+               for b in config.CUMULATIVE_BLOCKS}
     cohorts = {lv: c for lv, c in cohorts.items() if len(c) >= 2}
     if not cohorts:
         raise SystemExit("Fewer than two subjects have maps -- run `--stage maps` first.")
@@ -128,7 +148,8 @@ def stage_identify(subjects, outdir: Path, cleanup: bool) -> None:
             _write(outdir / "identification.json", records)
             for lv in cohorts:
                 mine = [r for r in records[lv] if r["true"] == sid]
-                print(f"    {lv}: recall {identify.accuracy(mine):.2f} "
+                print(f"    {lv:>5}: recall {identify.accuracy(mine):.2f} | "
+                      f"mean margin {identify.mean_margin(mine):+.4f} "
                       f"over {len(mine)} scans", flush=True)
             if cleanup:
                 print(f"    cleaned {cleanup_subject(sid, 'task'):.1f} GB of task data",
@@ -177,32 +198,81 @@ def cleanup_subject(subject: str, kind: str) -> float:
     return freed / 1e9
 
 
+# ---------------------------------------------------------------- stage: compare
+def stage_compare(subjects, outdir: Path) -> None:
+    """Within / between / to-group Dice, from maps already on disk. Reads no BOLD."""
+    have = [s for s in subjects if parcellation.has_map(s, (0, config.N_CHUNKS))]
+    if len(have) < 2:
+        raise SystemExit("Need maps for >=2 subjects -- run `--stage maps` first.")
+    print(f"comparing {len(have)} subjects: {have}", flush=True)
+
+    result = compare.compare_all(have)
+    _write(outdir / "comparisons.json", result)
+
+    print(f"\n{'level':>6} {'within':>8} {'between':>8} {'to-group':>9}   "
+          f"{'assoc(w)':>9} {'sensori(w)':>10}")
+    btw = {r["level"]: r for r in result["between"]}
+    for i, level in enumerate(config.level_name(b) for b in config.STABILITY_BLOCKS):
+        w = np.nanmean([result["per_subject"][s]["levels"][i]["within"] for s in have])
+        g = np.nanmean([result["per_subject"][s]["levels"][i]["to_group"] for s in have])
+        wa = np.nanmean([result["per_subject"][s]["levels"][i]["within_association"]
+                         for s in have])
+        ws = np.nanmean([result["per_subject"][s]["levels"][i]["within_sensorimotor"]
+                         for s in have])
+        print(f"{level:>6} {w:>8.3f} {btw[level]['dice']:>8.3f} {g:>9.3f}   "
+              f"{wa:>9.3f} {ws:>10.3f}")
+
+    crossings = {s: result["per_subject"][s]["crossover"] for s in have}
+    print("\ncrossover (within-person first exceeds similarity-to-group):")
+    for s, c in crossings.items():
+        print(f"  {s}: {c if c else 'not within the measured range'}")
+    reached = [c for c in crossings.values() if c]
+    print(f"  -> {len(reached)}/{len(have)} subjects cross; "
+          f"most common level: {max(set(reached), key=reached.count) if reached else 'n/a'}")
+
+
 # ----------------------------------------------------------------- stage: figure
 def stage_figure(outdir: Path) -> None:
     stability = _read(outdir / "stability.json", {})
     ident = _read(outdir / "identification.json", {})
+    comparisons = _read(outdir / "comparisons.json", {})
     if not stability:
         raise SystemExit("No stability results -- run `--stage maps` first.")
 
-    results = {"subjects": {s: {"stability": v} for s, v in stability.items()}}
+    results = {"subjects": {s: {"stability": v} for s, v in stability.items()},
+               "comparisons": comparisons}
     # Chance = 1 / number of candidate maps the scan was scored against.
     lineup = max((r.get("n_candidates", 0) for v in ident.values() for r in v), default=0)
     results["chance"] = 1.0 / lineup if lineup else float("nan")
     results["identification"] = [
-        {"level": lv, "accuracy": identify.accuracy(ident[lv]),
+        {"level": lv,
+         "accuracy": identify.accuracy(ident[lv]),
+         "margin": identify.mean_margin(ident[lv]),
          "n_scans": len(ident[lv]),
          "n_subjects": len({r["true"] for r in ident[lv]}),
          "n_candidates": max((r.get("n_candidates", 0) for r in ident[lv]), default=0)}
         for lv in config.LEVELS if ident.get(lv)
     ]
+    # Per-subject mean margin, so the bottom panel can show individual traces too.
+    for sub, res in results["subjects"].items():
+        res["margin"] = [
+            {"level": lv,
+             "margin": identify.mean_margin([r for r in ident[lv] if r["true"] == sub])}
+            for lv in config.LEVELS if ident.get(lv)
+        ]
 
     figure.save_csv(results, outdir / "curves.csv")
     figure.plot(results, outdir / "figure.png")
+    if comparisons.get("per_subject"):
+        figure.plot_comparisons(results, outdir / "figure_comparisons.png")
+        figure.save_comparison_csv(results, outdir / "comparisons.csv")
+        print(f"panels -> {outdir / 'figure_comparisons.png'}")
     _write(outdir / "results.json", results)
     print(f"\nfigure -> {outdir / 'figure.png'}")
     print(f"csv    -> {outdir / 'curves.csv'}")
     for row in results["identification"]:
-        print(f"  {row['level']} | identification {row['accuracy']:.3f} "
+        print(f"  {row['level']:>5} | margin {row['margin']:+.4f} "
+              f"| accuracy {row['accuracy']:.3f} "
               f"({row['n_scans']} scans, chance {results['chance']:.2f})")
 
 
@@ -210,7 +280,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--subjects", nargs="+", default=config.SUBJECTS)
     ap.add_argument("--outdir", default=str(config.RESULTS_DIR))
-    ap.add_argument("--stage", choices=["maps", "identify", "figure", "all"], default="all")
+    ap.add_argument("--stage",
+                    choices=["maps", "compare", "identify", "figure", "all"],
+                    default="all")
     ap.add_argument("--cleanup", action="store_true",
                     help="delete a subject's raw BOLD once their numbers are computed")
     return ap
@@ -230,6 +302,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.stage in ("maps", "all"):
         stage_maps(subjects, outdir, args.cleanup)
+    if args.stage in ("compare", "all"):
+        stage_compare(subjects, outdir)
     if args.stage in ("identify", "all"):
         stage_identify(subjects, outdir, args.cleanup)
     if args.stage in ("figure", "all"):

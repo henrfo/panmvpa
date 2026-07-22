@@ -70,26 +70,55 @@ def run_minutes(path_str: str) -> float:
     return nib.load(path_str).shape[-1] * config.TR / 60.0
 
 
-def quarters(subject: str) -> list[list[Scan]]:
-    """Split a subject's rest runs, in order, into four near-equal groups."""
-    runs = rest_runs(subject)
-    if len(runs) < config.N_QUARTERS:
+@lru_cache(maxsize=16)
+def timeline(subject: str) -> tuple[tuple[Scan, int, int], ...]:
+    """Lay the runs end to end: (run, global_start, global_end) in timepoints."""
+    out, t = [], 0
+    for r in rest_runs(subject):
+        n = int(round(run_minutes(str(r.path)) * 60.0 / config.TR))
+        out.append((r, t, t + n))
+        t += n
+    return tuple(out)
+
+
+def chunk_bounds(subject: str) -> list[tuple[int, int]]:
+    """N_CHUNKS segments of *equal duration* over the concatenated rest timeline.
+
+    Splitting by timepoints rather than by run count means every chunk holds exactly the
+    same amount of data, so a data level means the same thing at every point on the
+    x-axis and across subjects. The cost is that a chunk may straddle a run boundary,
+    which is harmless for correlation-based estimates. Any remainder timepoints beyond
+    the last whole chunk are dropped.
+    """
+    tl = timeline(subject)
+    if not tl:
+        raise ValueError(f"{config.sub_id(subject)}: no rest runs on disk.")
+    total = tl[-1][2]
+    per = total // config.N_CHUNKS
+    if per < 1:
         raise ValueError(
-            f"{config.sub_id(subject)}: only {len(runs)} rest runs on disk, "
-            f"need at least {config.N_QUARTERS} to form quarters."
+            f"{config.sub_id(subject)}: only {total} rest timepoints, too few for "
+            f"{config.N_CHUNKS} chunks."
         )
-    return [list(chunk) for chunk in np.array_split(np.array(runs, dtype=object),
-                                                   config.N_QUARTERS)]
+    return [(i * per, (i + 1) * per) for i in range(config.N_CHUNKS)]
 
 
-def runs_for(subject: str, quarter_ids: tuple[int, ...]) -> list[Scan]:
-    """The runs making up a given combination of quarters."""
-    qs = quarters(subject)
-    return [run for q in quarter_ids for run in qs[q]]
+def span_for(subject: str, spec: tuple[int, int]) -> tuple[int, int]:
+    """Global timepoint range [start, end) covered by a contiguous block of chunks."""
+    start, size = spec
+    bounds = chunk_bounds(subject)
+    return bounds[start][0], bounds[start + size - 1][1]
 
 
-def minutes_for(subject: str, quarter_ids: tuple[int, ...]) -> float:
-    return sum(run_minutes(str(r.path)) for r in runs_for(subject, quarter_ids))
+def minutes_for(subject: str, spec: tuple[int, int]) -> float:
+    t0, t1 = span_for(subject, spec)
+    return (t1 - t0) * config.TR / 60.0
+
+
+def runs_for(subject: str, spec: tuple[int, int]) -> list[Scan]:
+    """The runs that overlap a block — what actually has to be read off disk."""
+    t0, t1 = span_for(subject, spec)
+    return [r for r, s, e in timeline(subject) if s < t1 and e > t0]
 
 
 @lru_cache(maxsize=24)
@@ -108,7 +137,7 @@ def _load_masked(path_str: str) -> np.ndarray:
 
 
 def timeseries(runs: list[Scan]) -> np.ndarray:
-    """Concatenate z-scored, domain-masked timeseries across runs -> (n_voxels, n_time).
+    """Concatenate z-scored, domain-masked timeseries across whole runs.
 
     Each run is standardised before concatenation so run-level offsets and scale don't
     leak into the correlations. Returns a fresh array the caller may modify.
@@ -116,6 +145,26 @@ def timeseries(runs: list[Scan]) -> np.ndarray:
     if not runs:
         raise ValueError("no runs to load")
     return np.concatenate([_load_masked(str(r.path)) for r in runs], axis=1)
+
+
+def timeseries_for(subject: str, spec: tuple[int, int]) -> np.ndarray:
+    """Exactly the timepoints of a chunk block -> (n_voxels, n_time).
+
+    Only the runs overlapping the block are read, and each is sliced to its overlapping
+    portion, so a block that straddles a run boundary still yields exactly the requested
+    duration. Returns a fresh array the caller may modify.
+    """
+    t0, t1 = span_for(subject, spec)
+    parts = []
+    for run, start, end in timeline(subject):
+        if start >= t1 or end <= t0:
+            continue
+        ts = _load_masked(str(run.path))
+        lo, hi = max(t0, start) - start, min(t1, end) - start
+        parts.append(ts[:, lo:hi])
+    if not parts:
+        raise ValueError(f"{config.sub_id(subject)}: no data for block {spec}")
+    return np.concatenate(parts, axis=1)
 
 
 def load_scan(path: Path) -> np.ndarray:

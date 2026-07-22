@@ -13,8 +13,14 @@ from . import config, figure, identify, parcellation, rest
 from .config import LEVELS, SUBJECTS
 from .identify import identify as identify_scan
 from .identify import network_homogeneity
-from .parcellation import build_map, load_map, map_dice, save_map
-from .rest import quarters, rest_runs, task_scans
+from .parcellation import (
+    build_map,
+    dice_per_network,
+    load_map,
+    map_dice,
+    save_map,
+)
+from .rest import chunk_bounds, rest_runs, task_scans
 
 __all__ = [
     "config",
@@ -26,11 +32,12 @@ __all__ = [
     "LEVELS",
     "rest_runs",
     "task_scans",
-    "quarters",
+    "chunk_bounds",
     "build_map",
     "save_map",
     "load_map",
     "map_dice",
+    "dice_per_network",
     "network_homogeneity",
     "identify_scan",
 ]

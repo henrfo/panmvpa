@@ -53,37 +53,50 @@ ATLAS_IMAGE = ATLAS_DIR / "schaefer_2018" / (
 ATLAS_ORDER = ATLAS_DIR / "schaefer_2018" / "Schaefer2018_400Parcels_17Networks_order.txt"
 N_NETWORKS = 17
 
+# Association cortex is expected to need more data to individuate than sensory/motor
+# cortex. If so, "how long to scan" depends on which system you care about.
+SENSORIMOTOR = ["VisCent", "VisPeri", "SomMotA", "SomMotB"]
+ASSOCIATION = ["DefaultA", "DefaultB", "DefaultC", "ContA", "ContB", "ContC",
+               "SalVentAttnA", "SalVentAttnB", "DorsAttnA", "DorsAttnB",
+               "LimbicA", "LimbicB", "TempPar"]
+NETWORK_FAMILIES = {"association": ASSOCIATION, "sensorimotor": SENSORIMOTOR}
+
 # --- Data levels -----------------------------------------------------------
-N_QUARTERS = 4
+# Rest runs are split into 16 equal chunks. A map is identified by (start chunk, number
+# of chunks), always a contiguous block, so every map at a given size is disjoint from
+# its partner and the amount of data per map is exactly block/16 of the subject's rest.
+N_CHUNKS = 16
 
-# Maps built per subject, keyed by the quarters they use (0-indexed).
-MAP_KEYS: list[tuple[int, ...]] = [
-    (0,), (1,), (2,), (3,),      # quarter-sized
-    (0, 1), (2, 3),              # half-sized
-    (0, 1, 2),                   # three quarters
-    (0, 1, 2, 3),                # everything
-]
+# Block sizes used for stability. Size b gives 16/b disjoint maps -> 8/b disjoint pairs.
+STABILITY_BLOCKS = [1, 2, 4, 8]        # 8, 4, 2, 1 pairs respectively
+CUMULATIVE_BLOCKS = [1, 2, 4, 8, 16]   # the growing map used for identification
 
-# Plot 1: groups of equal-sized maps to compare against each other.
-VARIANCE_GROUPS: dict[str, list[tuple[int, ...]]] = {
-    "1/4": [(0,), (1,), (2,), (3,)],
-    "2/4": [(0, 1), (2, 3)],
-}
-
-# Plot 2: the cumulative map at each level.
-CUMULATIVE: dict[str, tuple[int, ...]] = {
-    "1/4": (0,),
-    "2/4": (0, 1),
-    "3/4": (0, 1, 2),
-    "4/4": (0, 1, 2, 3),
-}
-
-LEVELS = ["1/4", "2/4", "3/4", "4/4"]  # shared x-axis
+LEVELS = [f"{b}/{N_CHUNKS}" for b in CUMULATIVE_BLOCKS]  # shared x-axis
 
 
-def map_key(quarters: tuple[int, ...]) -> str:
-    """(0,1) -> 'q01'  — filename-safe id for a map."""
-    return "q" + "".join(str(q) for q in quarters)
+def level_name(block: int) -> str:
+    return f"{block}/{N_CHUNKS}"
+
+
+def stability_pairs(block: int) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    """Disjoint map pairs of a given block size, as ((start,size),(start,size))."""
+    starts = list(range(0, N_CHUNKS, block))
+    return [((starts[i], block), (starts[i + 1], block))
+            for i in range(0, len(starts) - 1, 2)]
+
+
+def map_specs() -> list[tuple[int, int]]:
+    """Every (start, size) map a subject needs, deduplicated."""
+    specs = {(0, b) for b in CUMULATIVE_BLOCKS}
+    for b in STABILITY_BLOCKS:
+        specs.update((s, b) for s in range(0, N_CHUNKS, b))
+    return sorted(specs)
+
+
+def map_key(spec: tuple[int, int]) -> str:
+    """(0, 2) -> 's00n02' — filename-safe id (two digits, so 1 and 10 never collide)."""
+    start, size = spec
+    return f"s{start:02d}n{size:02d}"
 
 
 def sub_id(subject: str) -> str:

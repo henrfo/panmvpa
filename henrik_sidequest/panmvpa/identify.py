@@ -35,22 +35,40 @@ def network_homogeneity(scan: np.ndarray, labels: np.ndarray) -> float:
 
 
 def identify(scan: np.ndarray, maps: dict[str, np.ndarray], truth: str) -> dict:
-    """Predict the subject a scan belongs to; the best-fitting map wins."""
+    """Score a scan against every candidate map; the best fit is the prediction.
+
+    ``margin`` is the continuous version of the answer:
+
+        margin = homogeneity(correct subject's map) - best homogeneity among the rest
+
+    Positive means correct, and larger means more confident. Accuracy saturates at 1.0
+    once 10 brains are easy to tell apart, but the margin keeps growing after that, so it
+    is the measure that can still show improvement at the top of the data range.
+    """
     scores = {sub: network_homogeneity(scan, lab) for sub, lab in maps.items()}
     predicted = max(scores, key=scores.get)
-    ranked = sorted(scores.values(), reverse=True)
+    others = [v for sub, v in scores.items() if sub != truth]
+    margin = (scores[truth] - max(others)) if (truth in scores and others) else float("nan")
     return {
         "true": truth,
         "predicted": predicted,
         "correct": predicted == truth,
-        # How decisively the winner won; a margin near zero means it was a coin flip.
-        "margin": float(ranked[0] - ranked[1]) if len(ranked) > 1 else float("nan"),
+        "margin": float(margin),
+        "score_true": float(scores.get(truth, float("nan"))),
+        "scores": {s: float(v) for s, v in scores.items()},
     }
 
 
 def accuracy(records: list[dict]) -> float:
     """Fraction of held-out scans assigned to the right subject."""
     return float(np.mean([r["correct"] for r in records])) if records else float("nan")
+
+
+def mean_margin(records: list[dict]) -> float:
+    """Mean signed margin. Keeps discriminating after accuracy hits its ceiling."""
+    vals = [r["margin"] for r in records if r.get("margin") is not None]
+    vals = [v for v in vals if v == v]  # drop NaN
+    return float(np.mean(vals)) if vals else float("nan")
 
 
 def summarize(records: list[dict], n_subjects: int) -> dict:

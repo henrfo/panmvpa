@@ -132,50 +132,85 @@ def winner_take_all(ts: np.ndarray) -> np.ndarray:
     return corr.argmax(axis=1).astype(np.int16) + 1
 
 
-def build_map(subject: str, quarter_ids: tuple[int, ...]) -> np.ndarray:
-    """The personal map from a given combination of a subject's rest quarters."""
-    return winner_take_all(rest.timeseries(rest.runs_for(subject, quarter_ids)))
+def build_map(subject: str, spec: tuple[int, int]) -> np.ndarray:
+    """The personal map from a contiguous block of a subject's rest chunks.
+
+    Chunks are equal-duration slices of the concatenated timeline, so every block holds
+    exactly (size/N_CHUNKS) of the subject's rest regardless of how runs divide up.
+    """
+    return winner_take_all(rest.timeseries_for(subject, spec))
 
 
 # --------------------------------------------------------------------- persistence
-def map_path(subject: str, quarter_ids: tuple[int, ...]) -> Path:
-    return config.MAPS_DIR / f"sub-{config.sub_id(subject)}_{config.map_key(quarter_ids)}.npy"
+def map_path(subject: str, spec: tuple[int, int]) -> Path:
+    return config.MAPS_DIR / f"sub-{config.sub_id(subject)}_{config.map_key(spec)}.npy"
 
 
-def save_map(labels: np.ndarray, subject: str, quarter_ids: tuple[int, ...]) -> Path:
-    path = map_path(subject, quarter_ids)
+def save_map(labels: np.ndarray, subject: str, spec: tuple[int, int]) -> Path:
+    path = map_path(subject, spec)
     path.parent.mkdir(parents=True, exist_ok=True)
     np.save(path, labels.astype(np.int16))
     return path
 
 
-def load_map(subject: str, quarter_ids: tuple[int, ...]) -> np.ndarray:
-    return np.load(map_path(subject, quarter_ids)).astype(np.int64)
+def load_map(subject: str, spec: tuple[int, int]) -> np.ndarray:
+    return np.load(map_path(subject, spec)).astype(np.int64)
 
 
-def has_map(subject: str, quarter_ids: tuple[int, ...]) -> bool:
-    return map_path(subject, quarter_ids).exists()
+def has_map(subject: str, spec: tuple[int, int]) -> bool:
+    return map_path(subject, spec).exists()
 
 
-def cohort(quarter_ids: tuple[int, ...]) -> dict[str, np.ndarray]:
+def cohort(spec: tuple[int, int]) -> dict[str, np.ndarray]:
     """{subject: map} for every subject with a stored map at this level."""
-    return {s: load_map(s, quarter_ids) for s in config.SUBJECTS if has_map(s, quarter_ids)}
+    return {s: load_map(s, spec) for s in config.SUBJECTS if has_map(s, spec)}
 
 
 # --------------------------------------------------------------------- comparison
-def map_dice(a: np.ndarray, b: np.ndarray) -> float:
-    """Agreement between two whole maps: mean Dice over the 17 networks.
+def dice_per_network(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Dice for each of the 17 networks separately -> array of length 17.
 
-    Dice per network is 2|A n B| / (|A| + |B|); networks absent from both maps are
-    skipped. 1.0 means the two maps carve the cortex identically.
+    Reported alongside the mean because Dice runs systematically lower for small
+    networks, so a rising mean could in principle be driven by the large ones alone.
+    NaN where a network is absent from both maps.
     """
-    scores = []
+    out = np.full(config.N_NETWORKS, np.nan)
     for k in range(1, config.N_NETWORKS + 1):
         ak, bk = (a == k), (b == k)
         denom = ak.sum() + bk.sum()
         if denom:
-            scores.append(2.0 * np.logical_and(ak, bk).sum() / denom)
-    return float(np.mean(scores)) if scores else float("nan")
+            out[k - 1] = 2.0 * np.logical_and(ak, bk).sum() / denom
+    return out
+
+
+def map_dice(a: np.ndarray, b: np.ndarray) -> float:
+    """Agreement between two whole maps: mean Dice over the 17 networks."""
+    per = dice_per_network(a, b)
+    return float(np.nanmean(per)) if np.isfinite(per).any() else float("nan")
+
+
+def group_map() -> np.ndarray:
+    """The fixed group parcellation over the analysis domain, as a comparable 'map'.
+
+    Used as the reference for similarity-to-group: a noisy individual map has barely
+    moved away from this, so early on it scores high and should fall as real individual
+    structure emerges.
+    """
+    return _domain_group_labels()
+
+
+@lru_cache(maxsize=1)
+def group_network_sizes() -> dict[str, int]:
+    """Voxel count of each network in the fixed group atlas, for size-vs-Dice checks."""
+    labels = _domain_group_labels()
+    order = network_order()
+    return {order[k - 1]: int((labels == k).sum()) for k in range(1, config.N_NETWORKS + 1)}
+
+
+def example_networks() -> list[str]:
+    """A small, a medium and a large network, to check all sizes rise with data."""
+    ranked = sorted(group_network_sizes().items(), key=lambda kv: kv[1])
+    return [ranked[0][0], ranked[len(ranked) // 2][0], ranked[-1][0]]
 
 
 def to_image(labels: np.ndarray) -> nib.Nifti1Image:
