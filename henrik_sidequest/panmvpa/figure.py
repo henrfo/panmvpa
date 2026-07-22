@@ -241,83 +241,219 @@ def _between_points(comp: dict, field: str = "dice") -> tuple[np.ndarray, np.nda
     return np.array(xs, float), np.array(ys, float)
 
 
-def plot_comparisons(results: dict, path: Path) -> None:
-    """Three panels on a shared minutes axis: individuation, family split, margin.
+def _subject_curves(comp: dict, field: str):
+    """[(minutes, values)] per subject for a per-subject field."""
+    out = []
+    for res in comp.get("per_subject", {}).values():
+        rows = [r for r in res.get("levels", []) if r.get("minutes")
+                and r.get(field) is not None]
+        if len(rows) >= 2:
+            out.append((np.array([r["minutes"] for r in rows], float),
+                        np.array([r[field] for r in rows], float)))
+    return out
 
-    Minutes, not fractions: a fraction means a different amount of data for each subject,
-    which would make a subject with less rest look like a more variable brain.
+
+def _network_curves(comp: dict, key: str):
+    """{network: (minutes, value)} — one smooth curve per network, averaged over subjects.
+
+    Each subject contributes their own curve on their own durations; those are then
+    interpolated onto a shared grid and averaged. Pooling the raw points from several
+    subjects into one sorted series instead produces a sawtooth, because subjects sit at
+    interleaved x with different values.
+    """
+    per_net: dict[str, list] = {}
+    for res in comp.get("per_subject", {}).values():
+        rows = [r for r in res.get("levels", []) if r.get("minutes")]
+        by_net: dict[str, list] = {}
+        for row in rows:
+            for net, val in (row.get(key) or {}).items():
+                if val is not None and np.isfinite(val):
+                    by_net.setdefault(net, []).append((row["minutes"], val))
+        for net, pts in by_net.items():
+            if len(pts) >= 2:
+                per_net.setdefault(net, []).append(
+                    (np.array([p[0] for p in pts], float),
+                     np.array([p[1] for p in pts], float)))
+
+    out = {}
+    for net, curves in per_net.items():
+        got = _grid_mean(curves)
+        if got:
+            gx, gy, _ = got
+            out[net] = (gx, gy)
+    return out
+
+
+def _grid_mean(curves, n_points: int = 40):
+    """Average curves that sit on different x by interpolating onto a shared grid.
+
+    Restricted to the range every curve actually covers, so the mean is never an
+    extrapolation of any subject.
+    """
+    curves = [(x, y) for x, y in curves if len(x) >= 2]
+    if not curves:
+        return None
+    lo = max(float(np.min(x)) for x, _ in curves)
+    hi = min(float(np.max(x)) for x, _ in curves)
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+        return None
+    grid = np.linspace(lo, hi, n_points)
+    stack = []
+    for x, y in curves:
+        order = np.argsort(x)
+        stack.append(np.interp(grid, x[order], y[order]))
+    arr = np.array(stack)
+    mean = arr.mean(axis=0)
+    if len(arr) > 1:
+        sem = arr.std(axis=0, ddof=1) / np.sqrt(len(arr))
+    else:
+        sem = np.zeros_like(grid)
+    return grid, mean, sem
+
+
+def _faint_then_mean(ax, curves, color, label, lw=2.6):
+    """Every curve at alpha 0.2, the interpolated mean bold on top."""
+    for x, y in curves:
+        order = np.argsort(x)
+        ax.plot(x[order], y[order], color=color, alpha=0.2, lw=1)
+    got = _grid_mean(curves)
+    if got:
+        gx, gy, gsem = got
+        ax.fill_between(gx, gy - gsem, gy + gsem, color=color, alpha=0.25, lw=0)
+        ax.plot(gx, gy, color=color, lw=lw, label=label)
+    return got
+
+
+def plot_comparisons(results: dict, path: Path) -> None:
+    """Five panels on a linear minutes axis.
+
+    Everything is shown -- every subject, every network -- faintly, with the mean bold.
+    No network is selected for display, so the mean cannot be flattered by the choice.
     """
     comp = results.get("comparisons", {})
     if not comp.get("per_subject"):
         return
     n = len(comp["per_subject"])
-    have_minutes = bool(comp.get("total_minutes"))
+    names = comp.get("networks", [])
 
-    fig, axes = plt.subplots(1, 3, figsize=(16.5, 5))
+    fig, axes = plt.subplots(2, 3, figsize=(17, 9))
+    axes = axes.ravel()
 
-    # --- A: within vs between vs group, all against real duration -------------
+    # --- A: individuation, every subject faint --------------------------------
     ax = axes[0]
-    wx, wy = _points(comp, "within")
-    gx_, gy_ = _points(comp, "to_group")
-    bx, by = _between_points(comp)
-    fit_w = _scatter_fit(ax, wx, wy, STABLE_COLOR, "within-person", "o")
-    _scatter_fit(ax, bx, by, "#999999", "between-person (null)", "s")
-    fit_g = _scatter_fit(ax, gx_, gy_, "#7b3294", "similarity to group", "^")
-
-    # Crossover in minutes: where the within and to-group fits meet.
-    if fit_w and fit_g:
-        gx = fit_w[0]
-        diff = fit_w[1] - np.interp(gx, fit_g[0], fit_g[1])
-        idx = np.flatnonzero(diff > 0)
-        if idx.size and idx[0] > 0:
-            xc = gx[idx[0]]
-            ax.axvline(xc, ls=":", color="black", lw=1.5)
-            ax.annotate(f"crossover\n≈{xc:.0f} min", (xc, 0.04), fontsize=8, ha="center",
-                        bbox=dict(boxstyle="round,pad=0.25", fc="white", alpha=0.85))
-        elif idx.size:
-            ax.annotate("within > group\nthroughout", (gx[1], 0.04), fontsize=8)
-    _log_x(ax)
-    ax.set_ylim(0, 1.02)
+    _faint_then_mean(ax, _subject_curves(comp, "within"), STABLE_COLOR, "within-person")
+    _faint_then_mean(ax, _subject_curves(comp, "to_group"), "#7b3294",
+                     "similarity to group")
+    btw = {}
+    for rec in comp.get("between_pairs", []):
+        if rec.get("minutes") and rec.get("dice") is not None:
+            btw.setdefault(tuple(rec["subjects"]), []).append((rec["minutes"], rec["dice"]))
+    bcurves = [(np.array([p[0] for p in v]), np.array([p[1] for p in v]))
+               for v in btw.values()]
+    _faint_then_mean(ax, bcurves, "#999999", "between-person (null)")
     ax.set_ylabel("Dice"); ax.set_xlabel("minutes of rest per map")
-    ax.set_title(f"A. Individuation (n={n})\neach point = one subject at one level")
-    ax.legend(fontsize=7, loc="upper left"); ax.grid(alpha=0.25, which="both")
+    ax.set_ylim(0, 1.02)
+    ax.set_title(f"A. Individuation (n={n})")
+    ax.legend(fontsize=8, loc="upper left"); ax.grid(alpha=0.25)
 
-    # --- B: association vs sensorimotor ---------------------------------------
+    # --- B: within-person, all 17 networks ------------------------------------
     ax = axes[1]
-    for family, marker in (("association", "o"), ("sensorimotor", "^")):
-        x1, y1 = _points(comp, f"within_{family}")
-        _scatter_fit(ax, x1, y1, STABLE_COLOR if family == "association" else "#41ab5d",
-                     f"within · {family}", marker)
-    x2, y2 = _between_points(comp, "association")
-    _scatter_fit(ax, x2, y2, "#999999", "between · association", "s")
-    _log_x(ax)
+    nets = _network_curves(comp, "within_per_network")
+    for net, (x, y) in nets.items():
+        order = np.argsort(x)
+        ax.plot(x[order], y[order], color=STABLE_COLOR, alpha=0.2, lw=1)
+    _grid = _grid_mean(list(nets.values()))
+    if _grid:
+        gx, gy, _ = _grid
+        ax.plot(gx, gy, color=STABLE_COLOR, lw=2.8, label="mean of 17 networks")
+    ax.set_ylabel("within-person Dice"); ax.set_xlabel("minutes of rest per map")
     ax.set_ylim(0, 1.02)
-    ax.set_ylabel("Dice"); ax.set_xlabel("minutes of rest per map")
-    ax.set_title("B. Association vs sensorimotor\ndoes one need more data?")
-    ax.legend(fontsize=7, loc="upper left"); ax.grid(alpha=0.25, which="both")
+    ax.set_title("B. Every network (within-person)")
+    ax.legend(fontsize=8, loc="upper left"); ax.grid(alpha=0.25)
 
-    # --- C: identification margin ---------------------------------------------
+    # --- C: network consistency across subjects (the between-person null) -----
     ax = axes[2]
+    bnet: dict[str, list] = {}
+    for rec in comp.get("between_pairs", []):
+        pass  # per-network between lives on the aggregated rows, below
+    for row in comp.get("between", []):
+        per = row.get("per_network") or {}
+        # x is the mean duration of that level across subjects
+        mins = [r["minutes"] for res in comp["per_subject"].values()
+                for r in res["levels"] if r["level"] == row["level"] and r.get("minutes")]
+        if not mins:
+            continue
+        for net, val in per.items():
+            if val is not None and np.isfinite(val):
+                bnet.setdefault(net, []).append((float(np.mean(mins)), val))
+    bcur = {n_: (np.array([p[0] for p in v]), np.array([p[1] for p in v]))
+            for n_, v in bnet.items()}
+    for net, (x, y) in bcur.items():
+        order = np.argsort(x)
+        ax.plot(x[order], y[order], color="#999999", alpha=0.25, lw=1)
+    g = _grid_mean(list(bcur.values()))
+    if g:
+        gx, gy, _ = g
+        ax.plot(gx, gy, color="#555555", lw=2.8, label="mean of 17 networks")
+    ax.set_ylabel("between-person Dice"); ax.set_xlabel("minutes of rest per map")
+    ax.set_ylim(0, 1.02)
+    ax.set_title("C. Network consistency across subjects\n(high = network looks alike in everyone)")
+    ax.legend(fontsize=8, loc="upper left"); ax.grid(alpha=0.25)
+
+    # --- D: within minus between, per network = individuation per network -----
+    ax = axes[3]
+    gaps = {}
+    for net, (wx, wy) in nets.items():
+        if net not in bcur:
+            continue
+        bx, by = bcur[net]
+        order = np.argsort(wx)
+        gx_, gy_ = wx[order], wy[order]
+        interp = np.interp(gx_, bx[np.argsort(bx)], by[np.argsort(bx)])
+        gaps[net] = (gx_, gy_ - interp)
+    for net, (x, y) in gaps.items():
+        ax.plot(x, y, color="#41ab5d", alpha=0.25, lw=1)
+    g = _grid_mean(list(gaps.values()))
+    if g:
+        gx, gy, _ = g
+        ax.plot(gx, gy, color="#238443", lw=2.8, label="mean of 17 networks")
+    ax.axhline(0, ls="--", lw=1, color="gray")
+    ax.set_ylabel("within − between (Dice)"); ax.set_xlabel("minutes of rest per map")
+    ax.set_title("D. Individuation per network\n(how far above the null)")
+    ax.legend(fontsize=8, loc="upper left"); ax.grid(alpha=0.25)
+
+    # --- E: ranked individuation gap at the most data ------------------------
+    ax = axes[4]
+    ranked = sorted(((net, y[-1]) for net, (x, y) in gaps.items()),
+                    key=lambda kv: kv[1])
+    if ranked:
+        fam = {n_: f for f, ns in config.NETWORK_FAMILIES.items() for n_ in ns}
+        colors = ["#41ab5d" if fam.get(k) == "association" else "#2c7fb8"
+                  for k, _ in ranked]
+        ax.barh([k for k, _ in ranked], [v for _, v in ranked], color=colors)
+        ax.set_xlabel("within − between at the most data")
+        ax.tick_params(axis="y", labelsize=7)
+        ax.set_title("E. Which networks individuate most\n(green = association, blue = sensorimotor)")
+        ax.grid(alpha=0.25, axis="x")
+
+    # --- F: identification margin --------------------------------------------
+    ax = axes[5]
     total = comp.get("total_minutes", {})
-    xs, ys = [], []
+    curves = []
     for sub, res in results["subjects"].items():
-        for row in res.get("margin", []):
-            block = int(row["level"].split("/")[0])
-            if sub in total and row.get("margin") is not None:
-                xs.append(total[sub] * block / config.N_CHUNKS)
-                ys.append(row["margin"])
-    if xs:
-        _scatter_fit(ax, xs, ys, SIGNAL_COLOR, "per subject × level", "s")
-        _log_x(ax)
-    ax.axhline(0, ls="--", lw=1, color="gray", label="0 = misidentified")
+        pts = [(total[sub] * int(r["level"].split("/")[0]) / config.N_CHUNKS, r["margin"])
+               for r in res.get("margin", [])
+               if sub in total and r.get("margin") is not None]
+        if len(pts) >= 2:
+            curves.append((np.array([p[0] for p in pts]), np.array([p[1] for p in pts])))
+    if curves:
+        _faint_then_mean(ax, curves, SIGNAL_COLOR, "mean margin")
+    ax.axhline(0, ls="--", lw=1, color="gray")
     ax.set_ylabel("margin (correct − best wrong)")
     ax.set_xlabel("minutes of rest per map")
-    ax.set_title("C. Identification margin")
-    ax.legend(fontsize=7, loc="upper left"); ax.grid(alpha=0.25, which="both")
+    ax.set_title("F. Identification margin")
+    ax.legend(fontsize=8, loc="upper left"); ax.grid(alpha=0.25)
 
-    if not have_minutes:
-        fig.suptitle("!! no durations recorded — re-run `--stage maps` with BOLD present",
-                     fontsize=10, color="crimson")
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=150)

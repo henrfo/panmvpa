@@ -246,6 +246,45 @@ def stage_compare(subjects, outdir: Path) -> None:
         print(f"{level:>6} {w:>8.3f} {btw[level]['dice']:>8.3f} {g:>9.3f}   "
               f"{wa:>9.3f} {ws:>10.3f}")
 
+    # --- slopes, finite differences, saturation -------------------------------
+    slopes = compare.slope_report(result)
+    result["slopes"] = slopes
+    _write(outdir / "comparisons.json", result)
+
+    print("\nslope in log(minutes)   b = gain per e-fold; per-doubling = b*ln2")
+    for field in ("within", "between", "to_group"):
+        g = slopes["group"].get(field)
+        if not g:
+            continue
+        s = g["slope"]
+        print(f"  {field:9} b={s['b']:+.4f}  per doubling={s['per_doubling']:+.4f}  "
+              f"r2={s['r2']:.3f}  (n={s['n']})")
+    ratio = slopes["b_within_over_b_between"]
+    if np.isfinite(ratio):
+        print(f"  b_within / b_between = {ratio:.2f}x "
+              f"({'individuation outpaces the baseline' if ratio > 1 else 'NO faster than baseline'})")
+    print(f"  per-subject b_within: mean {slopes['b_within_subject_mean']:+.4f} "
+          f"(sd {slopes['b_within_subject_sd']:.4f})")
+
+    print("\nfinite differences (dy/dlog x between adjacent levels)")
+    for field in ("within", "between", "to_group"):
+        g = slopes["group"].get(field)
+        if not g:
+            continue
+        fds = " ".join(f"{f['mid_minutes']:.0f}m:{f['slope']:+.3f}"
+                       for f in g["finite_differences"])
+        flag = "DECLINING -> saturating" if g["finite_differences_decline"] else "~constant"
+        print(f"  {field:9} {fds}   [{flag}]")
+        sat = g.get("saturating")
+        if sat:
+            enough = sat["enough_minutes"]
+            where = ("not reached in the measured range" if enough is None else
+                     f"{enough:.0f} min" + (" (EXTRAPOLATED beyond the data)"
+                                            if sat["extrapolated"] else ""))
+            print(f"            saturating fit: ymax={sat['ymax']:.3f} "
+                  f"tau={sat['tau']:.1f}m r2={sat['r2']:.3f}")
+            print(f"            'enough data' (<{sat['threshold']} Dice per doubling): {where}")
+
     crossings = {s: result["per_subject"][s]["crossover"] for s in have}
     print("\ncrossover (within-person first exceeds similarity-to-group):")
     for s, c in crossings.items():

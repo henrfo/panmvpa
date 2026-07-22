@@ -164,3 +164,164 @@ def compare_all(subjects: list[str], minutes: dict[str, float] | None = None) ->
                                        [r["to_group"] for r in rows]),
             }
     return out
+
+
+# ------------------------------------------------------------------ slopes / saturation
+def log_slope(minutes, values) -> dict:
+    """Least-squares fit of y against log(minutes): y = a + b*log(x).
+
+    ``b`` is the gain per e-fold of scan time; ``per_doubling`` = b*ln2 is the more
+    readable "how much do I gain by scanning twice as long".
+    """
+    x = np.asarray(minutes, float)
+    y = np.asarray(values, float)
+    ok = np.isfinite(x) & np.isfinite(y) & (x > 0)
+    if ok.sum() < 2 or len(np.unique(x[ok])) < 2:
+        return {"b": float("nan"), "intercept": float("nan"), "r2": float("nan"),
+                "per_doubling": float("nan"), "n": int(ok.sum())}
+    lx, yy = np.log(x[ok]), y[ok]
+    b, a = np.polyfit(lx, yy, 1)
+    resid = yy - (a + b * lx)
+    ss_tot = float(((yy - yy.mean()) ** 2).sum())
+    r2 = 1.0 - float((resid ** 2).sum()) / ss_tot if ss_tot > 0 else float("nan")
+    return {"b": float(b), "intercept": float(a), "r2": float(r2),
+            "per_doubling": float(b * np.log(2)), "n": int(ok.sum())}
+
+
+def finite_differences(minutes, values) -> list[dict]:
+    """Slope between adjacent levels: dy / dlog(x).
+
+    If the curve really is log-linear these are constant; if they decline, the single
+    fitted slope is hiding saturation and the log-linear form is the wrong model.
+    """
+    order = np.argsort(np.asarray(minutes, float))
+    x = np.asarray(minutes, float)[order]
+    y = np.asarray(values, float)[order]
+    out = []
+    for i in range(len(x) - 1):
+        if not (np.isfinite(x[i]) and np.isfinite(x[i + 1]) and x[i] > 0
+                and np.isfinite(y[i]) and np.isfinite(y[i + 1])):
+            continue
+        dlog = np.log(x[i + 1]) - np.log(x[i])
+        if dlog <= 0:
+            continue
+        out.append({"from_minutes": float(x[i]), "to_minutes": float(x[i + 1]),
+                    "mid_minutes": float(np.sqrt(x[i] * x[i + 1])),
+                    "slope": float((y[i + 1] - y[i]) / dlog),
+                    "per_doubling": float((y[i + 1] - y[i]) / dlog * np.log(2))})
+    return out
+
+
+def declining(fds: list[dict], tol: float = 0.0) -> bool:
+    """True if the finite differences trend downward -- i.e. the curve is saturating."""
+    if len(fds) < 3:
+        return False
+    x = np.log([f["mid_minutes"] for f in fds])
+    y = np.array([f["slope"] for f in fds])
+    return bool(np.polyfit(x, y, 1)[0] < -tol)
+
+
+def saturating_fit(minutes, values, threshold: float = 0.01) -> dict | None:
+    """Fit y = ymax * (1 - exp(-x/tau)) and find where the gains go flat.
+
+    ``enough_minutes`` is where scanning twice as long buys less than ``threshold`` Dice.
+    That is the defensible "enough data" number when the curve saturates -- a log-linear
+    fit can never produce one, because its gain per doubling is constant by construction.
+    """
+    from scipy.optimize import curve_fit
+
+    x = np.asarray(minutes, float)
+    y = np.asarray(values, float)
+    ok = np.isfinite(x) & np.isfinite(y) & (x > 0)
+    if ok.sum() < 3:
+        return None
+    x, y = x[ok], y[ok]
+
+    def model(t, ymax, tau):
+        return ymax * (1.0 - np.exp(-t / tau))
+
+    try:
+        p, _ = curve_fit(model, x, y, p0=[max(float(y.max()), 1e-3), float(np.median(x))],
+                         bounds=([0, 1e-3], [1.5, 1e5]), maxfev=20000)
+    except Exception:
+        return None
+    ymax, tau = float(p[0]), float(p[1])
+    resid = y - model(x, ymax, tau)
+    ss_tot = float(((y - y.mean()) ** 2).sum())
+    r2 = 1.0 - float((resid ** 2).sum()) / ss_tot if ss_tot > 0 else float("nan")
+
+    grid = np.linspace(x.min(), max(x.max() * 6, x.max() + 1), 4000)
+    gain = model(2 * grid, ymax, tau) - model(grid, ymax, tau)
+    below = np.flatnonzero(gain < threshold)
+    enough = float(grid[below[0]]) if below.size else None
+    return {"ymax": ymax, "tau": tau, "r2": r2, "threshold": threshold,
+            "enough_minutes": enough,
+            "extrapolated": bool(enough is not None and enough > float(x.max()))}
+
+
+def slope_report(comp: dict, threshold: float = 0.01) -> dict:
+    """Slopes, finite differences and (if the curve saturates) an 'enough data' point.
+
+    Per subject and pooled, for within / between / to_group. The ratio
+    b_within / b_between says how much faster individuation accrues than the baseline
+    drift that affects everyone's maps equally.
+    """
+    per_subject: dict[str, dict] = {}
+    pooled: dict[str, list[tuple[float, float]]] = {"within": [], "to_group": [],
+                                                    "between": []}
+
+    for sub, res in comp.get("per_subject", {}).items():
+        rows = [r for r in res.get("levels", []) if r.get("minutes")]
+        if len(rows) < 2:
+            continue
+        x = [r["minutes"] for r in rows]
+        entry = {}
+        for field in ("within", "to_group"):
+            y = [r.get(field) for r in rows]
+            entry[field] = {"slope": log_slope(x, y),
+                            "finite_differences": finite_differences(x, y)}
+            pooled[field].extend((xi, yi) for xi, yi in zip(x, y)
+                                 if yi is not None and np.isfinite(yi))
+        bw = entry["within"]["slope"]["b"]
+        entry["crossover_level"] = res.get("crossover")
+        per_subject[sub] = entry
+        entry["b_within"] = bw
+
+    for rec in comp.get("between_pairs", []):
+        if rec.get("minutes") and rec.get("dice") is not None:
+            pooled["between"].append((rec["minutes"], rec["dice"]))
+
+    group: dict[str, dict] = {}
+    for field, pts in pooled.items():
+        if not pts:
+            continue
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        fds = finite_differences(*_bin_by_x(xs, ys))
+        entry = {"slope": log_slope(xs, ys), "finite_differences": fds,
+                 "finite_differences_decline": declining(fds)}
+        if entry["finite_differences_decline"]:
+            entry["saturating"] = saturating_fit(xs, ys, threshold)
+        group[field] = entry
+
+    bw = group.get("within", {}).get("slope", {}).get("b", float("nan"))
+    bb = group.get("between", {}).get("slope", {}).get("b", float("nan"))
+    ratio = float(bw / bb) if (np.isfinite(bw) and np.isfinite(bb) and bb != 0) else float("nan")
+
+    subj_b = [v["b_within"] for v in per_subject.values() if np.isfinite(v.get("b_within", np.nan))]
+    return {
+        "threshold": threshold,
+        "per_subject": per_subject,
+        "group": group,
+        "b_within_over_b_between": ratio,
+        "b_within_subject_mean": float(np.mean(subj_b)) if subj_b else float("nan"),
+        "b_within_subject_sd": float(np.std(subj_b, ddof=1)) if len(subj_b) > 1 else 0.0,
+    }
+
+
+def _bin_by_x(xs, ys, decimals: int = 3):
+    """Average duplicate x positions so finite differences step through distinct levels."""
+    x = np.round(np.asarray(xs, float), decimals)
+    y = np.asarray(ys, float)
+    uniq = np.unique(x)
+    return uniq.tolist(), [float(np.nanmean(y[x == u])) for u in uniq]

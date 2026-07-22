@@ -34,7 +34,7 @@ DATA_ROOT = Path(
 )
 ATLAS_DIR = REPO_DIR / "atlases"
 MAPS_DIR = Path(os.environ.get("PANMVPA_MAPS") or REPO_DIR / "derivatives" / "maps")
-RESULTS_DIR = Path(os.environ.get("PANMVPA_RESULTS") or REPO_DIR.parent / "results")
+RESULTS_DIR = Path(os.environ.get("PANMVPA_RESULTS") or REPO_DIR / "results")
 
 # The analysis domain and group map are cached here so the later stages never need BOLD
 # on disk -- they only read .npy maps, and --cleanup deletes the BOLD.

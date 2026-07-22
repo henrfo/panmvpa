@@ -1,0 +1,76 @@
+{
+  "PAN01": [
+    {
+      "disagreement": 0.8055987510324529,
+      "agreement": 0.19440124896754704,
+      "n_pairs": 45,
+      "mean_voxels": 5839,
+      "minutes": 5,
+      "n_seeds": 10,
+      "spare_runs": 32
+    },
+    {
+      "disagreement": 0.6376352765051934,
+      "agreement": 0.36236472349480664,
+      "n_pairs": 45,
+      "mean_voxels": 4815,
+      "minutes": 10,
+      "n_seeds": 10,
+      "spare_runs": 31
+    },
+    {
+      "disagreement": 0.5541207649326898,
+      "agreement": 0.4458792350673102,
+      "n_pairs": 45,
+      "mean_voxels": 5021,
+      "minutes": 20,
+      "n_seeds": 10,
+      "spare_runs": 29
+    },
+    {
+      "disagreement": 0.4505945110487797,
+      "agreement": 0.5494054889512203,
+      "n_pairs": 45,
+      "mean_voxels": 5115,
+      "minutes": 40,
+      "n_seeds": 10,
+      "spare_runs": 25
+    },
+    {
+      "disagreement": 0.34883418120711107,
+      "agreement": 0.6511658187928889,
+      "n_pairs": 45,
+      "mean_voxels": 4420,
+      "minutes": 60,
+      "n_seeds": 10,
+      "spare_runs": 21
+    },
+    {
+      "disagreement": 0.2939012861399972,
+      "agreement": 0.7060987138600028,
+      "n_pairs": 45,
+      "mean_voxels": 4688,
+      "minutes": 80,
+      "n_seeds": 10,
+      "spare_runs": 17
+    },
+    {
+      "disagreement": 0.23918623788362736,
+      "agreement": 0.7608137621163726,
+      "n_pairs": 45,
+      "mean_voxels": 4453,
+      "minutes": 100,
+      "n_seeds": 10,
+      "spare_runs": 13
+    },
+    {
+      "disagreement": null,
+      "agreement": 1.0,
+      "n_pairs": 0,
+      "mean_voxels": 4558,
+      "minutes": null,
+      "n_seeds": 1,
+      "spare_runs": 0
+    }
+  ]
+}
