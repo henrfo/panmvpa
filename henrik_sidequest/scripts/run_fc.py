@@ -288,21 +288,43 @@ def _score(feats, y, groups):
     return acc, float((true_score - other.max(1)).mean())
 
 
+def _sessions_used(by_ses, minutes: float) -> int:
+    """How many sessions the emitted bundles actually consume (the trailing partial group
+    is dropped). Mirrors _bundles' reset logic on cheap session lengths, no cleaning."""
+    used_total, cur_min, cur_n = 0, 0.0, 0
+    for ses in sorted(by_ses):
+        cur_min += sum(r["parcels"].shape[0] for r in by_ses[ses]) * TR / 60.0
+        cur_n += 1
+        if cur_min >= minutes:
+            used_total += cur_n
+            cur_min, cur_n = 0.0, 0
+    return used_total
+
+
 def identify_table(sess, gsr: bool) -> list[dict]:
-    """For each X: build X-minute examples, score FC and the structural control."""
+    """For each X: build X-minute examples, score FC and the structural control.
+
+    ``used_frac`` is sessions actually behind this rung / sessions available -- it dips
+    below 1.0 when X doesn't divide a subject's session count, so a noisier rung isn't
+    misread as signal.
+    """
     rows = []
+    total_sessions = sum(len(v) for v in sess.values())
     for X in SVM_LADDER:
         feats_fc, feats_st, subs, groups, g = [], [], [], [], 0
         per_sub: dict[str, int] = {}
+        used = 0
         for sid, by_ses in sorted(sess.items()):
             bs = _bundles(by_ses, X, gsr)
             per_sub[sid] = len(bs)
+            used += _sessions_used(by_ses, X)
             for ts in bs:
                 feats_fc.append(fc_edges(ts))
                 feats_st.append(np.concatenate([ts.mean(0), ts.std(0)]))  # no connectivity
                 subs.append(sid); groups.append(g); g += 1
         min_per_sub = min(per_sub.values()) if per_sub else 0
-        row = {"min": X, "n": len(subs), "per_sub": min_per_sub}
+        row = {"min": X, "n": len(subs), "per_sub": min_per_sub,
+               "used_frac": used / total_sessions if total_sessions else 0.0}
         if len(set(subs)) >= 2 and min_per_sub >= 2:
             row["acc_fc"], row["margin_fc"] = _score(feats_fc, subs, groups)
             row["acc_st"], row["margin_st"] = _score(feats_st, subs, groups)
@@ -325,15 +347,16 @@ def stage_analyze(subjects) -> None:
 
     table = identify_table(sess, gsr=True)
     print(f"\nsubject ID vs minutes (chance={1.0/n_sub:.2f}; whole-session holdout):")
-    print("  min  examples  FC acc / margin    structural acc / margin (control)")
+    print("  min  examples  used   FC acc / margin    structural acc / margin (control)")
     for r in table:
+        used = f"{r['used_frac']:.0%}"
         if "acc_fc" in r:
-            print(f"  {r['min']:4.1f}  {r['n']:3d} (min {r['per_sub']}/subj)  "
+            print(f"  {r['min']:4.1f}  {r['n']:3d} (min {r['per_sub']}/subj)  {used:>4}  "
                   f"{r['acc_fc']:.2f} / {r['margin_fc']:+.2f}     "
                   f"{r['acc_st']:.2f} / {r['margin_st']:+.2f}")
         else:
             why = "need >=2 subjects" if n_sub < 2 else f"only {r['per_sub']} example(s)/subj — too few"
-            print(f"  {r['min']:4.1f}  {r['n']:3d}   ({why})")
+            print(f"  {r['min']:4.1f}  {r['n']:3d}          {used:>4}  ({why})")
 
     _analysis_figure(ov, table, n_sub)
 
