@@ -91,33 +91,43 @@ standardize="zscore_sample")`. Z-scoring is the one non-linear step, so it happe
 averaging, never in the reduction. The dataset ships only preprocessed BOLD — no confounds,
 no motion parameters, no masks — so the global signal is the nuisance lever we have.
 
-**The main result — individuality vs data (one x-axis, minutes of rest, linear):**
+**The main result — nearest-neighbour identification vs data (minutes of rest, linear):**
 
 A raw within-person convergence curve is meaningless alone, because the scale isn't 0–1.
-Two halves of *one* person's rest already agree ~0.9; two *different* people agree ~0.6 —
-most of a connectivity table is just "this is a human cortex," and that between-person floor
-itself **rises with data**. So both curves are grown on the same ladder, from the identical
-A-side estimate, changing only the reference:
+Two halves of *one* person's rest already agree ~0.9; two *different* people ~0.6 — most of a
+connectivity table is just "this is a human cortex," and the between-person floor itself
+**rises with data**. So everything grows on one ladder from the identical A-side estimate,
+changing only the reference. For subject A at *X* minutes, correlate A's growing-half FC
+against every subject's full reference half:
 
-- **within(X)** — A's first *X* minutes vs A's own second half.
-- **between(X)** — A's first *X* minutes vs each *other* subject's second half, averaged.
-- **gap(X) = within − between**, formed **per subject, then averaged** (never
-  mean-within − mean-between, which would difference one subject against a mix of others).
+- **r_self(X)** — vs A's own reference (the convergence / reliability curve).
+- **nearest(X)** — the **max** over other subjects: the nearest impostor, the identification
+  competitor. **floor(X)** — the **mean** over others: the group floor (same cross-
+  correlations, one loop).
+- **signal(X) = r_self − nearest** — the individual signal, formed per subject then averaged.
+  Unlike SVM accuracy it has **no ceiling**, and needing no held-out examples it runs the full
+  ladder to 80 min.
+- **headroom(X) = (r_self − nearest) / (1 − nearest)** — the fraction of *available*
+  individual signal captured. Reliability can be 0.92 while this is small: stable but generic.
+  If headroom is still climbing where r_self has flattened, the map is getting more
+  *distinctive* after it stopped getting more *reliable* — that gap is the result.
+- **hit rate** — was r_self the top match of all subjects? Reported, but it ceilings like the
+  SVM, so it isn't the headline.
 
-Reported: the gap per rung with a thin line per subject behind the mean and *n* per rung;
-the within- and between-slopes with their ratio (how fast individuality accrues vs the
-floor, on the linear axis); and three headline numbers — the **crossover** (minutes of your
-own data until self-similarity beats a stranger's stable map), and minutes to **90% of the
-final gap** and **90% of the final SVM margin** (each normalised to its own max-data value,
-no fitted asymptote).
+Headline numbers: the **crossover** (own-data minutes until r_self beats a stranger's stable
+map), and minutes to **90%** of r_self, of headroom, and of the signal — each normalised to
+its own max-data value, no fitted asymptote.
 
-- **Identifying** — one example = *X* minutes of one subject's rest, labelled by subject;
-  grow *X*, retrain a linear SVM, record the **margin** (how far the true subject beats the
-  runner-up — accuracy pins at 1.0 with this cohort size and is dropped from the plot). Held
-  out by **whole session**, never random minutes; examples are session-disjoint. An example
-  eats *X* minutes, so larger *X* means fewer examples; the line stops where a subject runs
-  out. A **connectivity-free control** (per-parcel temporal mean/SD) tests how much identity
-  is anatomy rather than covariance.
+- **SVM (second method)** — one example = *X* minutes labelled by subject; grow *X*, retrain,
+  record the **margin**. Held out by **whole session**, never random minutes; examples
+  session-disjoint. Kept for comparison but not the headline: accuracy pins at 1.0 with this
+  cohort, and an example eats *X* minutes so it dies past ~40 min when each subject has one
+  example to hold out. A **connectivity-free control** (per-parcel temporal mean/SD) tests how
+  much identity is anatomy rather than covariance.
+
+The figure is two panels on a shared linear x: **top** r_self and nearest with the signal
+shaded (thin line per subject, *n* per rung — the 60/80-min end rests on 2–3 people);
+**bottom** headroom with the SVM margin on a twin axis. Accuracy is dropped entirely.
 
 ```bash
 python scripts/run_fc.py inspect --subjects PAN01           # reduce ONE run, look, delete nothing

@@ -249,20 +249,23 @@ def _colmean(mat: np.ndarray) -> np.ndarray:
 
 
 def identity_curves(sess: dict[str, dict[int, list[dict]]], gsr: bool) -> dict:
-    """Within- and between-person FC agreement, both grown on the same minute ladder.
+    """Nearest-neighbour identification, grown on the full minute ladder (no held-out
+    examples, so unlike the SVM it runs to 80 min alongside the convergence curve).
 
-    The raw within-person curve is meaningless alone: two halves of ONE person already agree
-    ~0.9, two DIFFERENT people ~0.6 -- most of a connectivity table is just "human cortex,"
-    and the between-person floor itself rises with data. So we grow both from the identical
-    A-side estimate and change only the reference:
+    For each subject A, grow the first half minute-by-minute and correlate its FC against
+    every subject's reference (second) half:
 
-        within_A(X)  = corr( FC(A first-half, first X min),  FC(A second-half, full) )
-        between_A(X) = mean_B!=A corr( FC(A first-half, first X min),  FC(B second-half, full) )
-        gap_A(X)     = within_A(X) - between_A(X)          # per subject, THEN averaged
+        r_self(X)  = corr( FC(A first-half, first X min),  FC(A second-half, full) )
+        r_other    = { corr(same grow, FC(B second-half, full)) : B != A }
+        near(X)    = max r_other   -- the nearest impostor, the identification competitor
+        floor(X)   = mean r_other  -- the group floor (this is the earlier between-person mean)
+        signal(X)  = r_self - near -- individual signal; the headline, no ceiling
+        hit(X)     = r_self > near -- A's own half is the top match => identified (will ceiling)
+        headroom(X)= (r_self - near) / (1 - near)  -- fraction of available signal captured;
+                     can stay small while r_self is high (stable but generic)
 
-    The gap is formed within each subject before averaging -- never mean(within)-mean(between),
-    which would difference one subject's within against a different mix and compare A to B
-    rather than A to itself.
+    near, floor and everything else come from the SAME cross-correlations -- one loop. Every
+    per-subject quantity is formed before averaging, never mean-of-one minus mean-of-another.
     """
     subs = sorted(sess)
     first_half, ref_edges = {}, {}
@@ -273,8 +276,8 @@ def identity_curves(sess: dict[str, dict[int, list[dict]]], gsr: bool) -> dict:
         first_half[sid] = X[:h]
         ref_edges[sid] = fc_edges(X[h:])
 
-    within = {s: np.full(len(LADDER), np.nan) for s in subs}
-    between = {s: np.full(len(LADDER), np.nan) for s in subs}
+    keys = ("r_self", "near", "floor", "signal", "hit", "headroom")
+    per = {k: {s: np.full(len(LADDER), np.nan) for s in subs} for k in keys}
     for sid in subs:
         a = first_half[sid]
         for i, m in enumerate(LADDER):
@@ -282,21 +285,23 @@ def identity_curves(sess: dict[str, dict[int, list[dict]]], gsr: bool) -> dict:
             if not (MIN_TP <= n <= a.shape[0]):      # only points the subject truly has
                 continue
             grow = fc_edges(a[:n])
-            within[sid][i] = _corr(grow, ref_edges[sid])
-            others = [_corr(grow, ref_edges[b]) for b in subs if b != sid]
-            if others:
-                between[sid][i] = float(np.mean(others))
-    gap = {s: within[s] - between[s] for s in subs}
+            rs = _corr(grow, ref_edges[sid])
+            per["r_self"][sid][i] = rs
+            cross = [_corr(grow, ref_edges[b]) for b in subs if b != sid]
+            if cross:
+                near = max(cross)
+                per["near"][sid][i] = near
+                per["floor"][sid][i] = float(np.mean(cross))
+                per["signal"][sid][i] = rs - near
+                per["hit"][sid][i] = float(rs > near)
+                per["headroom"][sid][i] = (rs - near) / (1 - near) if near < 1 else np.nan
 
-    stack = lambda d: np.vstack([d[s] for s in subs])
-    W = stack(within)
-    return {
-        "minutes": LADDER, "subs": subs,
-        "within": within, "between": between, "gap": gap,
-        "within_mean": _colmean(W), "between_mean": _colmean(stack(between)),
-        "gap_mean": _colmean(stack(gap)),
-        "n": np.sum(~np.isnan(W), axis=0),
-    }
+    stack = lambda k: np.vstack([per[k][s] for s in subs])
+    out = {"minutes": LADDER, "subs": subs, "per": per,
+           "n": np.sum(~np.isnan(stack("r_self")), axis=0)}
+    for k in keys:
+        out[k + "_mean"] = _colmean(stack(k))   # hit_mean == hit rate (mean of 0/1)
+    return out
 
 
 def _slope(minutes: np.ndarray, values: np.ndarray, lo: float, hi: float) -> float:
@@ -434,30 +439,32 @@ def stage_analyze(subjects) -> None:
           f"{sum(len(v) for v in sess.values())} sessions reduced.")
 
     cur = identity_curves(sess, gsr=True)
-    mins, wmn, bmn, gmn, npr = (cur["minutes"], cur["within_mean"],
-                                cur["between_mean"], cur["gap_mean"], cur["n"])
-    print("\nindividuality: within-person vs between-person FC, same ladder (the main result)")
-    print("  min   n   within  between   gap")
+    mins, npr = cur["minutes"], cur["n"]
+    rs, near, floor = cur["r_self_mean"], cur["near_mean"], cur["floor_mean"]
+    sig, hit, head = cur["signal_mean"], cur["hit_mean"], cur["headroom_mean"]
+    print("\nidentification (nearest-neighbour, no held-out examples — runs the full ladder):")
+    print("  min   n   r_self  nearest   floor   signal   hit%   headroom")
     for i, m in enumerate(mins):
         if npr[i] == 0:
             continue
-        b = f"{bmn[i]:.3f}" if np.isfinite(bmn[i]) else "  -- "
-        g = f"{gmn[i]:+.3f}" if np.isfinite(gmn[i]) else "  -- "
-        print(f"  {m:4.1f}  {npr[i]:2d}   {wmn[i]:.3f}   {b}   {g}")
+        if np.isfinite(near[i]):
+            print(f"  {m:4.1f}  {npr[i]:2d}   {rs[i]:.3f}   {near[i]:.3f}   {floor[i]:.3f}   "
+                  f"{sig[i]:+.3f}   {hit[i]*100:3.0f}%   {head[i]:.3f}")
+        else:
+            print(f"  {m:4.1f}  {npr[i]:2d}   {rs[i]:.3f}     --       --       --      --      --")
 
-    # Gap only means something against a growing floor, so report both component slopes and
-    # their ratio over a stated linear range (the range where both curves have data).
-    both = np.isfinite(wmn) & np.isfinite(bmn)
+    # r_self accrues against a rising floor: report both slopes and their ratio (linear axis).
+    both = np.isfinite(rs) & np.isfinite(floor)
     if both.sum() >= 2:
         lo, hi = float(mins[both].min()), float(mins[both].max())
-        sw, sb = _slope(mins, wmn, lo, hi), _slope(mins, bmn, lo, hi)
+        sw, sb = _slope(mins, rs, lo, hi), _slope(mins, floor, lo, hi)
         ratio = sw / sb if np.isfinite(sb) and sb != 0 else float("nan")
         print(f"\nslope over [{lo:.0f}, {hi:.0f}] min (per minute, linear axis):")
-        print(f"  within {sw:+.4f}   between {sb:+.4f}   ratio {ratio:.2f}x "
-              f"(individuality accrues {ratio:.1f}x the shared floor)")
+        print(f"  r_self {sw:+.4f}   floor {sb:+.4f}   ratio {ratio:.2f}x "
+              f"(reliability accrues {ratio:.1f}x the group floor)")
 
     table = identify_table(sess, gsr=True)
-    print(f"\nsubject ID vs minutes (chance={1.0/n_sub:.2f}; whole-session holdout):")
+    print(f"\nSVM (second method; ceilings & dies at 40 min — chance={1.0/n_sub:.2f}):")
     print("  min  examples  used   FC acc / margin    structural acc / margin (control)")
     for r in table:
         used = f"{r['used_frac']:.0%}"
@@ -469,30 +476,35 @@ def stage_analyze(subjects) -> None:
             why = "need >=2 subjects" if n_sub < 2 else f"only {r['per_sub']} example(s)/subj — too few"
             print(f"  {r['min']:4.1f}  {r['n']:3d}          {used:>4}  ({why})")
 
-    # Three headline numbers, each normalised to its own curve's maximum-data value.
-    scored = [r for r in table if "acc_fc" in r]
-    mmin = np.array([r["min"] for r in scored], dtype=float)
-    mval = np.array([r["margin_fc"] for r in scored], dtype=float)
-    # Crossover: minutes of your OWN data until self-similarity beats a stranger's *stable*
-    # map -- within(X) rising through the between-person floor (between at max data). At low X
-    # a noisy self-estimate matches a stranger's well-estimated map better than your own, so
-    # this can sit well above 1 min. (Same-rung within-vs-between shares the noisy estimate and
-    # would cross at rung 1, saying nothing.) Floor taken at the largest rung backed by >=2.
-    stable = np.isfinite(bmn) & (npr >= 2)
-    bfloor = float(bmn[np.where(stable)[0][-1]]) if stable.any() else float("nan")
-    crossover = _reaches(mins, wmn, bfloor) if np.isfinite(bfloor) else float("nan")
-    gfin, _ = _final(mins, gmn)
-    t90_gap = _reaches(mins, gmn, 0.9 * gfin) if np.isfinite(gfin) else float("nan")
-    mfin, _ = _final(mmin, mval) if len(mmin) else (float("nan"), float("nan"))
-    t90_margin = _reaches(mmin, mval, 0.9 * mfin) if np.isfinite(mfin) else float("nan")
+    # Headline: the individual signal has no ceiling, so compare where reliability (r_self)
+    # plateaus vs where headroom does. If headroom still climbs after r_self flattens, the map
+    # is getting more *distinctive* after it has stopped getting more *reliable* -- the result.
+    def t90(mm, vv):
+        fin, _ = _final(mm, vv)
+        return (_reaches(mm, vv, 0.9 * fin) if np.isfinite(fin) else float("nan")), fin
     fmt = lambda x: f"{x:.1f} min" if np.isfinite(x) else "n/a (need more subjects/data)"
+    t_self, self_fin = t90(mins, rs)
+    t_head, head_fin = t90(mins, head)
+    t_sig, sig_fin = t90(mins, sig)
+    stable = np.isfinite(floor) & (npr >= 2)
+    bfloor = float(floor[np.where(stable)[0][-1]]) if stable.any() else float("nan")
+    crossover = _reaches(mins, rs, bfloor) if np.isfinite(bfloor) else float("nan")
+    hits = np.where((hit >= 1.0) & (npr >= 2))[0]
     print("\nheadline numbers:")
-    print(f"  crossover (within beats between-person floor {bfloor:.3f}): {fmt(crossover)}"
+    print(f"  crossover (r_self beats stable group floor {bfloor:.3f}): {fmt(crossover)}"
           if np.isfinite(bfloor) else "  crossover: n/a (need >=2 subjects)")
-    print(f"  to 90% of final gap ({gfin:+.3f}): {fmt(t90_gap)}" if np.isfinite(gfin)
-          else "  to 90% of final gap: n/a")
-    print(f"  to 90% of final margin ({mfin:+.2f}): {fmt(t90_margin)}" if np.isfinite(mfin)
-          else "  to 90% of final margin: n/a")
+    print(f"  r_self (reliability) to 90% of its {self_fin:.3f}: {fmt(t_self)}"
+          if np.isfinite(self_fin) else "  r_self to 90%: n/a")
+    print(f"  headroom (distinctiveness) to 90% of its {head_fin:.3f}: {fmt(t_head)}"
+          if np.isfinite(head_fin) else "  headroom to 90%: n/a")
+    print(f"  signal (r_self−nearest) to 90% of its {sig_fin:+.3f}: {fmt(t_sig)}"
+          if np.isfinite(sig_fin) else "  signal to 90%: n/a")
+    if np.isfinite(t_self) and np.isfinite(t_head):
+        later = "distinctiveness keeps accruing after reliability flattens" if t_head > t_self \
+            else "reliability and distinctiveness saturate together"
+        print(f"  -> {later} ({fmt(t_head)} vs {fmt(t_self)})")
+    if len(hits):
+        print(f"  nearest-neighbour hit rate reaches 100% at: {mins[hits[0]]:.1f} min (ceilings)")
 
     _analysis_figure(cur, table)
 
@@ -501,36 +513,45 @@ def _analysis_figure(cur, table) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    mins = cur["minutes"]
-    wmn, bmn, npr = cur["within_mean"], cur["between_mean"], cur["n"]
+    mins, npr = cur["minutes"], cur["n"]
+    rs, near, floor, head = (cur["r_self_mean"], cur["near_mean"],
+                             cur["floor_mean"], cur["headroom_mean"])
     fig, ax = plt.subplots(2, 1, figsize=(9, 8.5), sharex=True)
 
-    # Top: within, between, gap shaded; a thin line per subject behind each bold mean.
+    # Top: r_self and the nearest impostor, individual signal shaded between them; the group
+    # floor (mean) as a thin reference; a thin line per subject behind each bold mean.
     for sid in cur["subs"]:
-        ax[0].plot(mins, cur["within"][sid], color="C0", lw=0.5, alpha=0.3)
-        ax[0].plot(mins, cur["between"][sid], color="C1", lw=0.5, alpha=0.3)
-    both = np.isfinite(wmn) & np.isfinite(bmn)
-    ax[0].fill_between(mins, bmn, wmn, where=both, color="C2", alpha=0.15,
-                       label="gap = individuality")
-    ax[0].plot(mins, wmn, "o-", color="C0", lw=2, label="within (own other half)")
-    ax[0].plot(mins, bmn, "s-", color="C1", lw=2, label="between (a stranger)")
-    ymin = np.nanmin([np.nanmin(bmn[both]) if both.any() else np.nan, 0.5])
-    for i, m in enumerate(mins):          # n per rung, so 2-subject points read differently
+        ax[0].plot(mins, cur["per"]["r_self"][sid], color="C0", lw=0.5, alpha=0.3)
+        ax[0].plot(mins, cur["per"]["near"][sid], color="C1", lw=0.5, alpha=0.3)
+    both = np.isfinite(rs) & np.isfinite(near)
+    ax[0].fill_between(mins, near, rs, where=both, color="C2", alpha=0.15,
+                       label="signal = r_self − nearest")
+    ax[0].plot(mins, rs, "o-", color="C0", lw=2, label="r_self (own other half)")
+    ax[0].plot(mins, near, "s-", color="C1", lw=2, label="nearest other (competitor)")
+    ax[0].plot(mins, floor, ":", color="C7", lw=1.3, label="group floor (mean of others)")
+    ymin = np.nanmin([np.nanmin(near[both]) if both.any() else 0.5, 0.5])
+    for i, m in enumerate(mins):          # n per rung -- the 60/80 min end rests on 2-3 people
         if npr[i] > 0:
             ax[0].annotate(str(npr[i]), (m, ymin), fontsize=6, ha="center", color="gray")
     ax[0].set(ylabel="FC edge correlation (r)",
-              title="Stable & individual: within- vs between-person, same ladder")
+              title="Identification: r_self vs nearest impostor, same ladder")
     ax[0].legend(fontsize=8, loc="lower right")
 
-    # Bottom: margin only (accuracy is pinned at 1.0 with this cohort and says nothing) + control.
+    # Bottom: headroom (fraction of available signal captured), with the SVM margin on a twin
+    # axis for comparison. Accuracy dropped entirely -- it is pinned at 1.0.
+    l1, = ax[1].plot(mins, head, "o-", color="C3", label="headroom (fraction)")
+    ax[1].set(xlabel="minutes of rest (linear)", ylabel="headroom = signal / (1 − nearest)",
+              title="Distinctiveness (headroom) vs SVM margin")
+    ax[1].set_ylim(0, max(0.05, np.nanmax(head) * 1.15) if np.isfinite(np.nanmax(head)) else 1)
+    handles = [l1]
     ok = [r for r in table if "acc_fc" in r]
     if ok:
-        mm = [r["min"] for r in ok]
-        ax[1].plot(mm, [r["margin_fc"] for r in ok], "o-", label="FC (covariance)")
-        ax[1].plot(mm, [r["margin_st"] for r in ok], "s--", label="structural (control)")
-        ax[1].legend(fontsize=8, loc="upper left")
-    ax[1].set(xlabel="minutes of rest (linear)", ylabel="SVM margin (true − runner-up)",
-              title="Identifying: margin grows with data (accuracy pins at 1.0, dropped)")
+        axr = ax[1].twinx()
+        l2, = axr.plot([r["min"] for r in ok], [r["margin_fc"] for r in ok],
+                       "s--", color="C4", label="SVM margin (right)")
+        axr.set_ylabel("SVM margin (true − runner-up)")
+        handles.append(l2)
+    ax[1].legend(handles, [h.get_label() for h in handles], fontsize=8, loc="upper left")
     fig.tight_layout()
     config.FC_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out = config.FC_RESULTS_DIR / "curves.png"
