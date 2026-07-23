@@ -182,8 +182,10 @@ def fc_edges(ts: np.ndarray) -> np.ndarray:
     return edges(np.corrcoef(ts.T))
 
 
-# minutes ladder for both curves; filtered per subject to what the data supports
-LADDER = np.array([1, 2, 3, 4, 5, 7.5, 10, 15, 20], dtype=float)
+# Overlap ladder: trains nothing, so it runs the full cohort range. A subject with too
+# little rest to fill the first half at a given minute simply contributes NaN there and
+# drops out of that point's average.
+LADDER = np.array([1, 2, 3, 4, 5, 7.5, 10, 15, 20, 30, 45, 60, 80], dtype=float)
 
 # Minimum timepoints for a covariance worth correlating. With 400 parcels the matrix is
 # rank-deficient below ~400 TR, but every edge is still defined -- that low-data noise is
@@ -225,8 +227,14 @@ def overlap_curve(sess: dict[str, dict[int, list[dict]]], gsr: bool) -> np.ndarr
         half = X.shape[0] // 2
         ref = fc_edges(X[half:])
         a = X[:half]
-        row = [np.corrcoef(fc_edges(_first_minutes(a, m)), ref)[0, 1]
-               if _first_minutes(a, m).shape[0] >= MIN_TP else np.nan for m in LADDER]
+        # NaN (not the plateau value) once the ask exceeds the half's real duration --
+        # a[:n] with n past the end silently returns the whole half, which would fake a
+        # flat tail. Each subject only contributes points it genuinely has the data for.
+        row = []
+        for m in LADDER:
+            n = int(round(m * 60.0 / TR))
+            row.append(np.corrcoef(fc_edges(a[:n]), ref)[0, 1]
+                       if MIN_TP <= n <= a.shape[0] else np.nan)
         curves.append(row)
     return np.nanmean(np.array(curves), axis=0)
 
@@ -236,7 +244,7 @@ def overlap_curve(sess: dict[str, dict[int, list[dict]]], gsr: bool) -> np.ndarr
 # example spans two sessions (~4/subject); past that there is nothing to train on. The curve
 # stops where any subject has fewer than two examples -- stated, not hidden. The overlap line
 # has no such limit because it trains nothing.
-SVM_LADDER = np.array([5, 10, 15, 20, 30, 40], dtype=float)
+SVM_LADDER = np.array([5, 10, 15, 20, 30, 40, 60, 80], dtype=float)
 
 
 def _bundles(by_ses, minutes: float, gsr: bool) -> list[np.ndarray]:

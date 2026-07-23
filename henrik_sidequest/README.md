@@ -113,6 +113,35 @@ python scripts/run_fc.py analyze                            # the two lines + co
 `inspect` first: deletion is the only irreversible step, and `--cleanup` skips any run whose
 sanity check fails. The brain mask auto-downloads from templateflow on first run.
 
+**On the hub — prove it on one subject before looping over ten.** `--cleanup` deletes BOLD;
+do not point it at all ten until PAN01 has gone through inspect → reduce and you have
+confirmed the `.npz` files landed and the curve looks sane.
+
+```bash
+export DATA_DIR=$HOME/data/ds006598
+F=henrik_sidequest/scripts/fetch_hub.py
+R=henrik_sidequest/scripts/run_fc.py
+
+# 1. One subject, end to end. STOP and look before trusting --cleanup on the cohort.
+python $F --dest $DATA_DIR --subjects PAN01 --kind rest
+python $R inspect --subjects PAN01                    # eyeball the diagnostic PNG
+python $R reduce  --subjects PAN01 --cleanup
+ls henrik_sidequest/derivatives/reduced/v1/           # confirm the .npz landed
+python $R analyze                                     # one subject -> overlap only; curve sane?
+```
+
+```bash
+# 2. Only once that looks right: the cohort. `set -e` stops at the first failure so an empty
+#    DATA_DIR can't charge through all ten repeating the same error. Re-running is safe --
+#    an already-reduced run is skipped, not rebuilt.
+set -e
+for S in PAN01 PAN02 PAN03 PAN04 PAN05 PAN06 PAN07 PAN08 PAN09 PAN10; do
+  python $F --dest $DATA_DIR --subjects $S --kind rest
+  python $R reduce --subjects $S --cleanup
+done
+python $R analyze
+```
+
 ## Layout
 
 ```
