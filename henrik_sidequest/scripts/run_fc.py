@@ -259,10 +259,10 @@ def identity_curves(sess: dict[str, dict[int, list[dict]]], gsr: bool) -> dict:
         r_other    = { corr(same grow, FC(B second-half, full)) : B != A }
         near(X)    = max r_other   -- the nearest impostor, the identification competitor
         floor(X)   = mean r_other  -- the group floor (this is the earlier between-person mean)
-        signal(X)  = r_self - near -- individual signal; the headline, no ceiling
+        signal(X)  = r_self - near -- the individual signal; the headline, reported directly
+                     (not as headroom = signal/(1-near): that denominator moves, so headroom
+                     can rise while signal falls -- misleading)
         hit(X)     = r_self > near -- A's own half is the top match => identified (will ceiling)
-        headroom(X)= (r_self - near) / (1 - near)  -- fraction of available signal captured;
-                     can stay small while r_self is high (stable but generic)
 
     near, floor and everything else come from the SAME cross-correlations -- one loop. Every
     per-subject quantity is formed before averaging, never mean-of-one minus mean-of-another.
@@ -276,7 +276,7 @@ def identity_curves(sess: dict[str, dict[int, list[dict]]], gsr: bool) -> dict:
         first_half[sid] = X[:h]
         ref_edges[sid] = fc_edges(X[h:])
 
-    keys = ("r_self", "near", "floor", "signal", "hit", "headroom")
+    keys = ("r_self", "near", "floor", "signal", "hit")
     per = {k: {s: np.full(len(LADDER), np.nan) for s in subs} for k in keys}
     for sid in subs:
         a = first_half[sid]
@@ -294,7 +294,6 @@ def identity_curves(sess: dict[str, dict[int, list[dict]]], gsr: bool) -> dict:
                 per["floor"][sid][i] = float(np.mean(cross))
                 per["signal"][sid][i] = rs - near
                 per["hit"][sid][i] = float(rs > near)
-                per["headroom"][sid][i] = (rs - near) / (1 - near) if near < 1 else np.nan
 
     stack = lambda k: np.vstack([per[k][s] for s in subs])
     out = {"minutes": LADDER, "subs": subs, "per": per,
@@ -441,27 +440,35 @@ def stage_analyze(subjects) -> None:
     cur = identity_curves(sess, gsr=True)
     mins, npr = cur["minutes"], cur["n"]
     rs, near, floor = cur["r_self_mean"], cur["near_mean"], cur["floor_mean"]
-    sig, hit, head = cur["signal_mean"], cur["hit_mean"], cur["headroom_mean"]
+    sig, hit = cur["signal_mean"], cur["hit_mean"]
+
+    # The honest range is the rungs every subject reaches. Past it the mean is carried by a
+    # shrinking, self-selected few (the 80-min point can be one person), so slopes and the
+    # 90%-of-final normalisation are computed there, and the plot de-emphasises it.
+    full = npr == n_sub
+    fi = np.where(full)[0]
+    hi_full = float(mins[fi[-1]]) if len(fi) else float("nan")
+
     print("\nidentification (nearest-neighbour, no held-out examples — runs the full ladder):")
-    print("  min   n   r_self  nearest   floor   signal   hit%   headroom")
+    print("  min   n   r_self  nearest   floor   signal   hit%")
     for i, m in enumerate(mins):
         if npr[i] == 0:
             continue
+        tail = "" if full[i] else "  <- n<%d" % n_sub
         if np.isfinite(near[i]):
             print(f"  {m:4.1f}  {npr[i]:2d}   {rs[i]:.3f}   {near[i]:.3f}   {floor[i]:.3f}   "
-                  f"{sig[i]:+.3f}   {hit[i]*100:3.0f}%   {head[i]:.3f}")
+                  f"{sig[i]:+.3f}   {hit[i]*100:3.0f}%{tail}")
         else:
-            print(f"  {m:4.1f}  {npr[i]:2d}   {rs[i]:.3f}     --       --       --      --      --")
+            print(f"  {m:4.1f}  {npr[i]:2d}   {rs[i]:.3f}     --       --       --      --{tail}")
 
-    # r_self accrues against a rising floor: report both slopes and their ratio (linear axis).
-    both = np.isfinite(rs) & np.isfinite(floor)
-    if both.sum() >= 2:
-        lo, hi = float(mins[both].min()), float(mins[both].max())
-        sw, sb = _slope(mins, rs, lo, hi), _slope(mins, floor, lo, hi)
+    # r_self accrues against a rising floor: both slopes + ratio, over the full-cohort range.
+    if len(fi) >= 2:
+        lo = float(mins[fi[0]])
+        sw, sb = _slope(mins, rs, lo, hi_full), _slope(mins, floor, lo, hi_full)
         ratio = sw / sb if np.isfinite(sb) and sb != 0 else float("nan")
-        print(f"\nslope over [{lo:.0f}, {hi:.0f}] min (per minute, linear axis):")
+        print(f"\nslope over [{lo:.0f}, {hi_full:.0f}] min (n={n_sub} throughout, linear axis):")
         print(f"  r_self {sw:+.4f}   floor {sb:+.4f}   ratio {ratio:.2f}x "
-              f"(reliability accrues {ratio:.1f}x the group floor)")
+              f"(reliability accrues {ratio:.2f}x the group floor)")
 
     table = identify_table(sess, gsr=True)
     print(f"\nSVM (second method; ceilings & dies at 40 min — chance={1.0/n_sub:.2f}):")
@@ -476,73 +483,79 @@ def stage_analyze(subjects) -> None:
             why = "need >=2 subjects" if n_sub < 2 else f"only {r['per_sub']} example(s)/subj — too few"
             print(f"  {r['min']:4.1f}  {r['n']:3d}          {used:>4}  ({why})")
 
-    # Headline: the individual signal has no ceiling, so compare where reliability (r_self)
-    # plateaus vs where headroom does. If headroom still climbs after r_self flattens, the map
-    # is getting more *distinctive* after it has stopped getting more *reliable* -- the result.
-    def t90(mm, vv):
-        fin, _ = _final(mm, vv)
-        return (_reaches(mm, vv, 0.9 * fin) if np.isfinite(fin) else float("nan")), fin
+    # Headline: reliability (r_self) and distinctiveness (signal) reported separately, each to
+    # 90% of its own value AT THE LAST FULL-COHORT RUNG (not the n<10 tail, which is inflated).
+    def t90_full(vv):
+        if not len(fi):
+            return float("nan"), float("nan")
+        fin = float(vv[fi[-1]])
+        if not np.isfinite(fin):
+            return float("nan"), float("nan")
+        # only search within the full-cohort range so a sparse-tail value can't set the target
+        capped = np.where(full, vv, np.nan)
+        return _reaches(mins, capped, 0.9 * fin), fin
     fmt = lambda x: f"{x:.1f} min" if np.isfinite(x) else "n/a (need more subjects/data)"
-    t_self, self_fin = t90(mins, rs)
-    t_head, head_fin = t90(mins, head)
-    t_sig, sig_fin = t90(mins, sig)
-    stable = np.isfinite(floor) & (npr >= 2)
-    bfloor = float(floor[np.where(stable)[0][-1]]) if stable.any() else float("nan")
+    t_self, self_fin = t90_full(rs)
+    t_sig, sig_fin = t90_full(sig)
+    bfloor = float(floor[fi[-1]]) if len(fi) else float("nan")
     crossover = _reaches(mins, rs, bfloor) if np.isfinite(bfloor) else float("nan")
     hits = np.where((hit >= 1.0) & (npr >= 2))[0]
-    print("\nheadline numbers:")
+    print(f"\nheadline numbers (over the n={n_sub} range, to {hi_full:.0f} min):")
     print(f"  crossover (r_self beats stable group floor {bfloor:.3f}): {fmt(crossover)}"
           if np.isfinite(bfloor) else "  crossover: n/a (need >=2 subjects)")
-    print(f"  r_self (reliability) to 90% of its {self_fin:.3f}: {fmt(t_self)}"
+    print(f"  r_self (reliability)   to 90% of its {self_fin:.3f}: {fmt(t_self)}"
           if np.isfinite(self_fin) else "  r_self to 90%: n/a")
-    print(f"  headroom (distinctiveness) to 90% of its {head_fin:.3f}: {fmt(t_head)}"
-          if np.isfinite(head_fin) else "  headroom to 90%: n/a")
-    print(f"  signal (r_self−nearest) to 90% of its {sig_fin:+.3f}: {fmt(t_sig)}"
+    print(f"  signal (distinctiveness) to 90% of its {sig_fin:+.3f}: {fmt(t_sig)}"
           if np.isfinite(sig_fin) else "  signal to 90%: n/a")
-    if np.isfinite(t_self) and np.isfinite(t_head):
-        later = "distinctiveness keeps accruing after reliability flattens" if t_head > t_self \
-            else "reliability and distinctiveness saturate together"
-        print(f"  -> {later} ({fmt(t_head)} vs {fmt(t_self)})")
     if len(hits):
         print(f"  nearest-neighbour hit rate reaches 100% at: {mins[hits[0]]:.1f} min (ceilings)")
 
-    _analysis_figure(cur, table)
+    _analysis_figure(cur, table, n_sub)
 
 
-def _analysis_figure(cur, table) -> None:
+def _analysis_figure(cur, table, n_sub) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     mins, npr = cur["minutes"], cur["n"]
-    rs, near, floor, head = (cur["r_self_mean"], cur["near_mean"],
-                             cur["floor_mean"], cur["headroom_mean"])
+    rs, near, floor, sig = (cur["r_self_mean"], cur["near_mean"],
+                            cur["floor_mean"], cur["signal_mean"])
+    full = npr == n_sub                       # rungs every subject reaches
+    fi = np.where(full)[0]
+    tail = np.zeros(len(mins), bool)          # sparse tail, connected back to the last full rung
+    if len(fi):
+        tail[fi[-1]:] = True
+    seg = lambda y, mask: (np.where(mask, mins, np.nan), np.where(mask, y, np.nan))
     fig, ax = plt.subplots(2, 1, figsize=(9, 8.5), sharex=True)
 
-    # Top: r_self and the nearest impostor, individual signal shaded between them; the group
-    # floor (mean) as a thin reference; a thin line per subject behind each bold mean.
+    # Top: r_self vs nearest impostor, signal shaded (full-cohort rungs only); group floor
+    # dotted; a thin line per subject behind. The n<n_sub tail is drawn thin-grey, not bold --
+    # the 80-min point can be a single subject and must not read as the headline.
     for sid in cur["subs"]:
-        ax[0].plot(mins, cur["per"]["r_self"][sid], color="C0", lw=0.5, alpha=0.3)
-        ax[0].plot(mins, cur["per"]["near"][sid], color="C1", lw=0.5, alpha=0.3)
-    both = np.isfinite(rs) & np.isfinite(near)
-    ax[0].fill_between(mins, near, rs, where=both, color="C2", alpha=0.15,
-                       label="signal = r_self − nearest")
-    ax[0].plot(mins, rs, "o-", color="C0", lw=2, label="r_self (own other half)")
-    ax[0].plot(mins, near, "s-", color="C1", lw=2, label="nearest other (competitor)")
-    ax[0].plot(mins, floor, ":", color="C7", lw=1.3, label="group floor (mean of others)")
-    ymin = np.nanmin([np.nanmin(near[both]) if both.any() else 0.5, 0.5])
-    for i, m in enumerate(mins):          # n per rung -- the 60/80 min end rests on 2-3 people
+        ax[0].plot(mins, cur["per"]["r_self"][sid], color="C0", lw=0.5, alpha=0.22)
+        ax[0].plot(mins, cur["per"]["near"][sid], color="C1", lw=0.5, alpha=0.22)
+    ax[0].fill_between(mins, near, rs, where=full & np.isfinite(rs) & np.isfinite(near),
+                       color="C2", alpha=0.15, label="signal = r_self − nearest")
+    ax[0].plot(*seg(rs, tail), color="0.6", lw=1, ls="--")
+    ax[0].plot(*seg(near, tail), color="0.6", lw=1, ls="--", label=f"n < {n_sub} (de-emphasised)")
+    ax[0].plot(*seg(rs, full), "o-", color="C0", lw=2, label="r_self (own other half)")
+    ax[0].plot(*seg(near, full), "s-", color="C1", lw=2, label="nearest other (competitor)")
+    ax[0].plot(*seg(floor, full), ":", color="C3", lw=1.4, label="group floor (mean of others)")
+    ymin = np.nanmin([np.nanmin(near[full]) if full.any() else 0.5, 0.5])
+    for i, m in enumerate(mins):
         if npr[i] > 0:
-            ax[0].annotate(str(npr[i]), (m, ymin), fontsize=6, ha="center", color="gray")
+            ax[0].annotate(str(npr[i]), (m, ymin), fontsize=6, ha="center",
+                           color="0.5" if full[i] else "C3")
     ax[0].set(ylabel="FC edge correlation (r)",
-              title="Identification: r_self vs nearest impostor, same ladder")
+              title=f"Identification: r_self vs nearest impostor (bold = n={n_sub})")
     ax[0].legend(fontsize=8, loc="lower right")
 
-    # Bottom: headroom (fraction of available signal captured), with the SVM margin on a twin
-    # axis for comparison. Accuracy dropped entirely -- it is pinned at 1.0.
-    l1, = ax[1].plot(mins, head, "o-", color="C3", label="headroom (fraction)")
-    ax[1].set(xlabel="minutes of rest (linear)", ylabel="headroom = signal / (1 − nearest)",
-              title="Distinctiveness (headroom) vs SVM margin")
-    ax[1].set_ylim(0, max(0.05, np.nanmax(head) * 1.15) if np.isfinite(np.nanmax(head)) else 1)
+    # Bottom: the signal itself (dropped headroom -- its denominator moves), with the SVM
+    # margin on a twin axis. Accuracy dropped entirely -- pinned at 1.0.
+    ax[1].plot(*seg(sig, tail), color="0.6", lw=1, ls="--")
+    l1, = ax[1].plot(*seg(sig, full), "o-", color="C2", label="signal (distinctiveness)")
+    ax[1].set(xlabel="minutes of rest (linear)", ylabel="signal = r_self − nearest",
+              title="Distinctiveness (signal, no ceiling) vs SVM margin (dies at 40 min)")
     handles = [l1]
     ok = [r for r in table if "acc_fc" in r]
     if ok:

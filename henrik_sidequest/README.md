@@ -104,19 +104,21 @@ against every subject's full reference half:
 - **nearest(X)** — the **max** over other subjects: the nearest impostor, the identification
   competitor. **floor(X)** — the **mean** over others: the group floor (same cross-
   correlations, one loop).
-- **signal(X) = r_self − nearest** — the individual signal, formed per subject then averaged.
-  Unlike SVM accuracy it has **no ceiling**, and needing no held-out examples it runs the full
-  ladder to 80 min.
-- **headroom(X) = (r_self − nearest) / (1 − nearest)** — the fraction of *available*
-  individual signal captured. Reliability can be 0.92 while this is small: stable but generic.
-  If headroom is still climbing where r_self has flattened, the map is getting more
-  *distinctive* after it stopped getting more *reliable* — that gap is the result.
+- **signal(X) = r_self − nearest** — the individual signal, formed per subject then averaged
+  and reported **directly** (not as headroom = signal/(1−nearest); that denominator moves, so
+  headroom can rise while the signal itself falls). Unlike SVM accuracy it has **no ceiling**,
+  and needing no held-out examples it runs the full ladder to 80 min.
 - **hit rate** — was r_self the top match of all subjects? Reported, but it ceilings like the
   SVM, so it isn't the headline.
 
-Headline numbers: the **crossover** (own-data minutes until r_self beats a stranger's stable
-map), and minutes to **90%** of r_self, of headroom, and of the signal — each normalised to
-its own max-data value, no fitted asymptote.
+Everything past the rung every subject reaches (the n<10 tail — at 80 min a single subject
+with the most rest) is **de-emphasised**: slopes and the 90%-of-final normalisation are
+computed over the full-cohort range only, and the plot greys those rungs so the highest point
+on the chart isn't one person. Headline numbers over that range: the **crossover** (own-data
+minutes until r_self beats a stranger's stable map), and minutes to **90%** of r_self
+(reliability) and of the signal (distinctiveness) **separately** — normalised to each curve's
+value at the last full-cohort rung, no fitted asymptote. Whether those two land together or
+apart is the result.
 
 - **SVM (second method)** — one example = *X* minutes labelled by subject; grow *X*, retrain,
   record the **margin**. Held out by **whole session**, never random minutes; examples
@@ -126,8 +128,9 @@ its own max-data value, no fitted asymptote.
   much identity is anatomy rather than covariance.
 
 The figure is two panels on a shared linear x: **top** r_self and nearest with the signal
-shaded (thin line per subject, *n* per rung — the 60/80-min end rests on 2–3 people);
-**bottom** headroom with the SVM margin on a twin axis. Accuracy is dropped entirely.
+shaded and the group floor dotted (thin line per subject, *n* per rung, n<10 rungs greyed);
+**bottom** the signal with the SVM margin on a twin axis — distinctiveness with no ceiling
+against a margin that dies at 40 min. Accuracy is dropped entirely.
 
 ```bash
 python scripts/run_fc.py inspect --subjects PAN01           # reduce ONE run, look, delete nothing
