@@ -133,3 +133,25 @@ def sub_id(subject: str) -> str:
     """Normalise 'PAN01', 'sub-PAN01', or '01' -> 'PAN01'."""
     s = subject.removeprefix("sub-").removeprefix("PAN")
     return f"PAN{s}"
+
+
+# --- FC sidequest ----------------------------------------------------------
+# A leaner analysis alongside the WTA maps. Reduce each rest run to three arrays and delete
+# the 730 MB BOLD: the 400 Schaefer parcel timeseries (raw), the whole-brain mean signal,
+# and frame-to-frame change (DVARS). From those few-MB files:
+#
+#   overlap  -- how fast a subject's parcel-covariance converges to its own stable value
+#   identify -- how much rest a linear SVM needs to tell the 10 subjects apart
+#
+# Parcels are saved raw so cleaning is a cheap analysis-time knob: nilearn.signal.clean
+# regresses out the global signal, band-passes and z-scores the 400 timelines in one call.
+# (z-scoring is the one step that must come after parcel-averaging, so it never happens
+# here.) The whole-brain mean and DVARS both fall out of the brain mask, which is published
+# in NLin6Asym -- our exact BOLD space -- so nothing needs resampling.
+FC_VERSION = os.environ.get("PANMVPA_FC_VERSION", "v1")
+REDUCED_DIR = Path(os.environ.get("PANMVPA_REDUCED") or DERIV_DIR / "reduced" / FC_VERSION)
+FC_RESULTS_DIR = Path(os.environ.get("PANMVPA_FC_RESULTS") or REPO_DIR / "results" / "fc" / FC_VERSION)
+ASSET_DIR = Path(os.environ.get("PANMVPA_ASSETS") or DERIV_DIR / "assets")
+N_PARCELS = 400
+BRAIN_MASK_URL = ("https://templateflow.s3.amazonaws.com/tpl-MNI152NLin6Asym/"
+                  "tpl-MNI152NLin6Asym_res-02_desc-brain_mask.nii.gz")

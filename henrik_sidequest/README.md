@@ -67,6 +67,52 @@ Held-out scans are **task runs only** — never used to build a map at any level
 test set is identical across the whole x-axis. The scan list is a function of subject
 alone; it takes no level argument.
 
+## Leaner variant — parcel covariance (`scripts/run_fc.py`)
+
+Same two questions, the standard method for them: reduce each rest run to a **Schaefer-400
+parcel covariance** and ask (1) how fast it converges and (2) how much rest a linear SVM
+needs to tell the ten subjects apart. This is the ordinary FC-convergence + fingerprinting
+approach — not a reimplementation of anyone's parcellation procedure.
+
+**Reduce, then delete.** The download is 180 GB and the hub has 15, so the only real
+machinery is a loop that pulls one run, shrinks it, deletes it. Each run becomes three
+arrays (~300 KB vs 730 MB), computed with nilearn maskers:
+
+```
+parcels  (T, 400)  Schaefer-400 parcel means, RAW
+gs       (T,)      whole-brain mean signal (brain mask, NLin6Asym — our exact grid)
+dvars    (T,)      frame-to-frame RMS change — the motion-spike proxy
+```
+
+Raw on purpose: detrend / band-pass / global-signal regression are all linear and commute
+with parcel-averaging, so cleaning is a cheap analysis-time knob —
+`nilearn.signal.clean(parcels, confounds=gs, detrend, low_pass=0.08, high_pass=0.009,
+standardize="zscore_sample")`. Z-scoring is the one non-linear step, so it happens *after*
+averaging, never in the reduction. The dataset ships only preprocessed BOLD — no confounds,
+no motion parameters, no masks — so the global signal is the nuisance lever we have.
+
+**Two lines, one x-axis (minutes of rest):**
+
+- **Stable** — split all of a subject's rest in half, grow the first half minute-by-minute,
+  correlate its covariance edges against the independent second half. No training, so it
+  runs the full range.
+- **Identifying** — one example = *X* minutes of one subject's rest, labelled by subject;
+  grow *X*, retrain a linear SVM, record accuracy **and margin** (how far the true subject
+  beats the runner-up — the line still moving after accuracy pins at 1.0 with only ten
+  people). Held out by **whole session**, never random minutes. An example eats *X* minutes,
+  so larger *X* means fewer examples; the line stops around 20–40 min, where a subject runs
+  out of examples. Alongside it, a **connectivity-free control** (per-parcel temporal
+  mean/SD) tests how much of the identity is anatomy rather than covariance.
+
+```bash
+python scripts/run_fc.py inspect --subjects PAN01           # reduce ONE run, look, delete nothing
+python scripts/run_fc.py reduce  --subjects PAN01 --cleanup # reduce all rest, then drop the BOLD
+python scripts/run_fc.py analyze                            # the two lines + control (needs the cohort)
+```
+
+`inspect` first: deletion is the only irreversible step, and `--cleanup` skips any run whose
+sanity check fails. The brain mask auto-downloads from templateflow on first run.
+
 ## Layout
 
 ```
@@ -75,9 +121,10 @@ panmvpa/rest.py          find scans, split into quarters, load timeseries
 panmvpa/parcellation.py  WTA map building, saving, map-to-map Dice
 panmvpa/identify.py      homogeneity scoring and subject identification
 panmvpa/figure.py        the two-panel plot + CSV
-panmvpa/cli.py           stage runner
+panmvpa/cli.py           stage runner (WTA maps)
 scripts/fetch_hub.py     S3 streaming download, one subject at a time
-scripts/run_all.py       entry point
+scripts/run_all.py       entry point (WTA maps)
+scripts/run_fc.py        the leaner parcel-covariance variant (reduce / inspect / analyze)
 ```
 
 ## Running it
