@@ -91,34 +91,45 @@ standardize="zscore_sample")`. Z-scoring is the one non-linear step, so it happe
 averaging, never in the reduction. The dataset ships only preprocessed BOLD — no confounds,
 no motion parameters, no masks — so the global signal is the nuisance lever we have.
 
-**Two lines, one x-axis (minutes of rest):**
+**The main result — individuality vs data (one x-axis, minutes of rest, linear):**
 
-- **Stable** — split all of a subject's rest in half, grow the first half minute-by-minute,
-  correlate its covariance edges against the independent second half. No training, so it
-  runs the full range.
+A raw within-person convergence curve is meaningless alone, because the scale isn't 0–1.
+Two halves of *one* person's rest already agree ~0.9; two *different* people agree ~0.6 —
+most of a connectivity table is just "this is a human cortex," and that between-person floor
+itself **rises with data**. So both curves are grown on the same ladder, from the identical
+A-side estimate, changing only the reference:
+
+- **within(X)** — A's first *X* minutes vs A's own second half.
+- **between(X)** — A's first *X* minutes vs each *other* subject's second half, averaged.
+- **gap(X) = within − between**, formed **per subject, then averaged** (never
+  mean-within − mean-between, which would difference one subject against a mix of others).
+
+Reported: the gap per rung with a thin line per subject behind the mean and *n* per rung;
+the within- and between-slopes with their ratio (how fast individuality accrues vs the
+floor, on the linear axis); and three headline numbers — the **crossover** (minutes of your
+own data until self-similarity beats a stranger's stable map), and minutes to **90% of the
+final gap** and **90% of the final SVM margin** (each normalised to its own max-data value,
+no fitted asymptote).
+
 - **Identifying** — one example = *X* minutes of one subject's rest, labelled by subject;
-  grow *X*, retrain a linear SVM, record accuracy **and margin** (how far the true subject
-  beats the runner-up — the line still moving after accuracy pins at 1.0 with only ten
-  people). Held out by **whole session**, never random minutes. An example eats *X* minutes,
-  so larger *X* means fewer examples; the line stops around 20–40 min, where a subject runs
-  out of examples. Alongside it, a **connectivity-free control** (per-parcel temporal
-  mean/SD) tests how much of the identity is anatomy rather than covariance.
+  grow *X*, retrain a linear SVM, record the **margin** (how far the true subject beats the
+  runner-up — accuracy pins at 1.0 with this cohort size and is dropped from the plot). Held
+  out by **whole session**, never random minutes; examples are session-disjoint. An example
+  eats *X* minutes, so larger *X* means fewer examples; the line stops where a subject runs
+  out. A **connectivity-free control** (per-parcel temporal mean/SD) tests how much identity
+  is anatomy rather than covariance.
 
 ```bash
 python scripts/run_fc.py inspect --subjects PAN01           # reduce ONE run, look, delete nothing
 python scripts/run_fc.py reduce  --subjects PAN01 --cleanup # reduce all rest, then drop the BOLD
-python scripts/run_fc.py analyze 2>/dev/null                # the two lines + control (needs the cohort)
+python scripts/run_fc.py analyze                            # within/between/gap + SVM (needs the cohort)
 ```
 
 `inspect` first: deletion is the only irreversible step, and `--cleanup` skips any run whose
-sanity check fails. The brain mask auto-downloads from templateflow on first run.
-
-nilearn prints a per-run deprecation notice to **stderr** while cleaning (a future version
-divides by a slightly different number when standardizing confounds — harmless, results
-unaffected). The tables go to **stdout**, so `analyze 2>/dev/null` keeps the numbers and
-drops the noise; drop the redirect if a run errors and you need the traceback. It is not
-filtered in code because the warning's class differs across nilearn versions, which makes a
-category/message filter brittle — the redirect is version-proof.
+sanity check fails. The brain mask auto-downloads from templateflow on first run. nilearn's
+per-run deprecation notices (confound standardization, masker resampling — harmless) are
+silenced in-code, scoped to each nilearn call and class-agnostic, so the tables stay
+readable without a stderr redirect.
 
 **On the hub — prove it on one subject before looping over ten.** `--cleanup` deletes BOLD;
 do not point it at all ten until PAN01 has gone through inspect → reduce and you have
@@ -134,7 +145,7 @@ python $F --dest $DATA_DIR --subjects PAN01 --kind rest
 python $R inspect --subjects PAN01                    # eyeball the diagnostic PNG
 python $R reduce  --subjects PAN01 --cleanup
 ls henrik_sidequest/derivatives/reduced/v1/           # confirm the .npz landed
-python $R analyze 2>/dev/null                          # one subject -> overlap only; curve sane?
+python $R analyze                                     # one subject -> within only; curve sane?
 ```
 
 ```bash
@@ -146,7 +157,7 @@ for S in PAN01 PAN02 PAN03 PAN04 PAN05 PAN06 PAN07 PAN08 PAN09 PAN10; do
   python $F --dest $DATA_DIR --subjects $S --kind rest
   python $R reduce --subjects $S --cleanup
 done
-python $R analyze 2>/dev/null
+python $R analyze
 ```
 
 ## Layout
