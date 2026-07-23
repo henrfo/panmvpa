@@ -24,19 +24,16 @@ from __future__ import annotations
 import argparse
 import sys
 import urllib.request
-import warnings
 from pathlib import Path
 
 import numpy as np
 
-# nilearn emits these two on every masker transform -- hundreds of lines per run that bury
-# the numbers. Silence exactly these, by message, not the whole warning system: the raw
-# (standardize=False) parcels are deliberate, and the atlas is knowingly resampled to the
-# BOLD grid (a no-op here since they share it).
-warnings.filterwarnings("ignore", category=FutureWarning,
-                        message=r"boolean values for 'standardize'.*")
-warnings.filterwarnings("ignore", category=UserWarning,
-                        message=r"Resampling labels at transform time.*")
+# nilearn prints a per-run deprecation notice while cleaning (a future version will divide
+# by a slightly different number when standardizing confounds -- harmless, results
+# unaffected). It goes to stderr, the tables go to stdout, so `analyze 2>/dev/null` keeps
+# the numbers and drops the noise. We do NOT filter it in code: the warning's class differs
+# across nilearn versions (Future vs Deprecation), so a category/message filter is brittle;
+# the stream redirect is version-proof.
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from panmvpa import config, rest  # noqa: E402

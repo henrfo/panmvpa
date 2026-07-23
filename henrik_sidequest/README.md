@@ -107,11 +107,18 @@ no motion parameters, no masks — so the global signal is the nuisance lever we
 ```bash
 python scripts/run_fc.py inspect --subjects PAN01           # reduce ONE run, look, delete nothing
 python scripts/run_fc.py reduce  --subjects PAN01 --cleanup # reduce all rest, then drop the BOLD
-python scripts/run_fc.py analyze                            # the two lines + control (needs the cohort)
+python scripts/run_fc.py analyze 2>/dev/null                # the two lines + control (needs the cohort)
 ```
 
 `inspect` first: deletion is the only irreversible step, and `--cleanup` skips any run whose
 sanity check fails. The brain mask auto-downloads from templateflow on first run.
+
+nilearn prints a per-run deprecation notice to **stderr** while cleaning (a future version
+divides by a slightly different number when standardizing confounds — harmless, results
+unaffected). The tables go to **stdout**, so `analyze 2>/dev/null` keeps the numbers and
+drops the noise; drop the redirect if a run errors and you need the traceback. It is not
+filtered in code because the warning's class differs across nilearn versions, which makes a
+category/message filter brittle — the redirect is version-proof.
 
 **On the hub — prove it on one subject before looping over ten.** `--cleanup` deletes BOLD;
 do not point it at all ten until PAN01 has gone through inspect → reduce and you have
@@ -127,7 +134,7 @@ python $F --dest $DATA_DIR --subjects PAN01 --kind rest
 python $R inspect --subjects PAN01                    # eyeball the diagnostic PNG
 python $R reduce  --subjects PAN01 --cleanup
 ls henrik_sidequest/derivatives/reduced/v1/           # confirm the .npz landed
-python $R analyze                                     # one subject -> overlap only; curve sane?
+python $R analyze 2>/dev/null                          # one subject -> overlap only; curve sane?
 ```
 
 ```bash
@@ -139,7 +146,7 @@ for S in PAN01 PAN02 PAN03 PAN04 PAN05 PAN06 PAN07 PAN08 PAN09 PAN10; do
   python $F --dest $DATA_DIR --subjects $S --kind rest
   python $R reduce --subjects $S --cleanup
 done
-python $R analyze
+python $R analyze 2>/dev/null
 ```
 
 ## Layout
