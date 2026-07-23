@@ -24,9 +24,19 @@ from __future__ import annotations
 import argparse
 import sys
 import urllib.request
+import warnings
 from pathlib import Path
 
 import numpy as np
+
+# nilearn emits these two on every masker transform -- hundreds of lines per run that bury
+# the numbers. Silence exactly these, by message, not the whole warning system: the raw
+# (standardize=False) parcels are deliberate, and the atlas is knowingly resampled to the
+# BOLD grid (a no-op here since they share it).
+warnings.filterwarnings("ignore", category=FutureWarning,
+                        message=r"boolean values for 'standardize'.*")
+warnings.filterwarnings("ignore", category=UserWarning,
+                        message=r"Resampling labels at transform time.*")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from panmvpa import config, rest  # noqa: E402
@@ -236,7 +246,12 @@ def overlap_curve(sess: dict[str, dict[int, list[dict]]], gsr: bool) -> np.ndarr
             row.append(np.corrcoef(fc_edges(a[:n]), ref)[0, 1]
                        if MIN_TP <= n <= a.shape[0] else np.nan)
         curves.append(row)
-    return np.nanmean(np.array(curves), axis=0)
+    # Average each minute over the subjects that reached it. A column no subject reached
+    # (a rung past everyone's half) averages to NaN without np.nanmean's empty-slice warning.
+    arr = np.array(curves)
+    counts = np.sum(~np.isnan(arr), axis=0)
+    sums = np.nansum(arr, axis=0)
+    return np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
 
 
 # SVM ladder is separate from the overlap ladder and capped: an example eats X minutes, so
@@ -271,6 +286,12 @@ def _score(feats, y, groups):
     margin = decision score of the true subject minus the best-scoring other subject,
     averaged over held-out examples. Once ten subjects are trivially separable accuracy
     pins at 1.0, but the margin keeps rising -- so it is the line still saying something.
+
+    Works for any number of classes. With exactly two (the sparse high-X rungs, where only
+    a couple of subjects have enough data) sklearn's decision_function returns one signed
+    score per sample instead of a column per class; that single hyperplane gives antisymmetric
+    class scores (+s, -s), so it expands to the same two-column form and margin means exactly
+    what it does in the multi-class case: true-class score minus the runner-up's.
     """
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import StandardScaler
@@ -280,6 +301,8 @@ def _score(feats, y, groups):
     clf = make_pipeline(StandardScaler(), LinearSVC(dual="auto", C=1.0))
     df = cross_val_predict(clf, np.asarray(feats), y, groups=np.asarray(groups),
                            cv=LeaveOneGroupOut(), method="decision_function")
+    if df.ndim == 1:                       # binary -> columns [class_0, class_1] = [-s, +s]
+        df = np.column_stack([-df, df])
     classes = np.unique(y)
     ti = np.searchsorted(classes, y)
     acc = float((classes[df.argmax(1)] == y).mean())
@@ -381,7 +404,8 @@ def _analysis_figure(ov, table, n_sub) -> None:
               title="Identifying: accuracy (pins at 1.0 early)")
     ax[2].set(xlabel="minutes of rest", ylabel="margin (true − runner-up)",
               title="Identifying: margin (still rising)")
-    ax[1].legend(fontsize=8); ax[2].legend(fontsize=8)
+    if ok:  # only once the SVM panels have lines (skipped when <2 subjects are reduced)
+        ax[1].legend(fontsize=8); ax[2].legend(fontsize=8)
     fig.tight_layout()
     config.FC_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out = config.FC_RESULTS_DIR / "curves.png"
