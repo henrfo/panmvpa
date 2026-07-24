@@ -595,6 +595,7 @@ def stage_analyze(subjects, run_svm: bool = False) -> None:
     if n_sub >= 2:
         cur_off = identity_curves(sess, gsr=False)     # robustness overlay: global signal kept
         _residual_figure(cur, n_sub, cur_off)          # the main analysis: group-residual reliability
+        _emerge_figure(cur, n_sub)                     # the residual result shown as maps
         # Headline numbers at the last full-cohort rung, with subject-bootstrap 95% CI.
         fi_full = np.where(cur["n"] == n_sub)[0]
         if len(fi_full):
@@ -825,7 +826,7 @@ def _network_figure(cur, nb, target_min) -> None:
         ax[0].axhline(b - 0.5, color="#888888", lw=0.3); ax[0].axvline(b - 0.5, color="#888888", lw=0.3)
     ax[0].set_xticks(centers); ax[0].set_xticklabels(full_names, rotation=90, fontsize=ps.FS["tick"])
     ax[0].set_yticks(centers); ax[0].set_yticklabels(full_names, fontsize=ps.FS["tick"])
-    ps.panel(ax[0], 0, "average connectivity, parcels sorted by network")
+    ps.panel(ax[0], 0, "average connectivity (parcels sorted by network)")
     ps.colorbar(fig, im0, ax[0])
 
     im1 = ax[1].imshow(S, cmap=ps.SUNSET_HI)   # dark = more
@@ -886,6 +887,72 @@ def _nettraj_figure(cur, nb, n_sub) -> None:
               f"$N$ = {n_sub} people  |  colours fixed by panel (a)'s ranking  |  to {hi:.0f} min",
               top=0.80)
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'nettraj')}")
+
+
+def _emerge_figure(cur, n_sub) -> None:
+    """The residual result shown as maps, not a curve: one subject, a 2xC grid of correlation
+    matrices, parcels sorted by Yeo-17 network with block boundary lines. Top row = the whole map
+    from the first 1/5/20/45 min; bottom row = the same with the leave-one-out group pattern
+    (others' second halves) subtracted. The top row settles by ~5 min; the bottom stays noisy --
+    that is the residual finding shown directly. Two colour scales, one per row (a shared scale
+    would saturate the residual). Subject = the one with the MEDIAN residual, named, so it reads
+    as one person, not an average."""
+    ps.apply()
+    subs = cur["subs"]
+    fi = np.where(cur["n"] == n_sub)[0]
+    if not len(fi):
+        return
+    ri = fi[-1]                                   # last full-cohort rung (45 min on the cohort)
+    ranked = sorted((s for s in subs if np.isfinite(cur["per"]["r_resid_reg"][s][ri])),
+                    key=lambda s: cur["per"]["r_resid_reg"][s][ri])
+    if not ranked:
+        return
+    s = ranked[len(ranked) // 2]                  # median individual signal
+    a, g = cur["first_half"][s], cur["g2"][s]
+
+    nets, names = _parcel_networks()
+    order = np.argsort(nets, kind="stable")
+    bounds = np.cumsum([int(np.sum(nets[order] == k)) for k in range(len(names))])
+    iu = np.triu_indices(config.N_PARCELS, k=1)
+
+    def mat(edges):
+        M = np.zeros((config.N_PARCELS, config.N_PARCELS))
+        M[iu] = edges
+        M = M + M.T
+        np.fill_diagonal(M, np.nan)               # self-correlation isn't structure
+        return M[np.ix_(order, order)]
+
+    cols = [m for m in (1, 5, 20, 45) if int(round(m * 60.0 / TR)) <= a.shape[0]]
+    whole, resid = [], []
+    for m in cols:
+        e = fc_edges(a[: int(round(m * 60.0 / TR))])
+        whole.append(mat(e)); resid.append(mat(e - g))   # subtract the group pattern
+    vt = float(np.nanpercentile(np.abs(whole[-1]), 98))   # scale from the most-data map, per row
+    vb = float(np.nanpercentile(np.abs(resid[-1]), 98))
+    cmap = ps.SUNSET_DIV.with_extremes(bad="white")
+
+    C = len(cols)
+    fig, axes = ps.plt.subplots(2, C, figsize=(ps.FULL, 4.2))
+    axes = np.atleast_2d(axes)
+    for i, (rlab, mats, vmax) in enumerate((("whole map", whole, vt),
+                                            ("individual part", resid, vb))):
+        im = None
+        for j, M in enumerate(mats):
+            ax = axes[i, j]
+            im = ax.imshow(M, cmap=cmap, vmin=-vmax, vmax=vmax)
+            for b in bounds[:-1]:
+                ax.axhline(b - 0.5, color="#666666", lw=0.25)
+                ax.axvline(b - 0.5, color="#666666", lw=0.25)
+            ax.set_xticks([]); ax.set_yticks([])
+            if i == 0:
+                ax.set_title(f"{cols[j]:g} min", fontsize=ps.FS["label"], color=ps.PANEL, pad=4)
+        axes[i, 0].set_ylabel(rlab, fontsize=ps.FS["label"])
+        cb = fig.colorbar(im, ax=axes[i].tolist(), fraction=0.018, pad=0.015, aspect=18)
+        cb.outline.set_visible(False); cb.ax.tick_params(length=0, labelsize=ps.FS["tick"])
+    ps.titles(fig, "One person's map, with and without the group pattern",
+              f"subject {config.sub_id(s)} (median individual part)  |  parcels sorted by Yeo-17 "
+              f"network  |  colour ±{vt:.2f} (top), ±{vb:.2f} (bottom)  |  $N$ = {n_sub}", top=0.84)
+    print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'emerge')}")
 
 
 # ---------------------------------------------------------------- entry

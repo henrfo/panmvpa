@@ -154,7 +154,13 @@ survives changes to the metric it came from; a CSV doesn't). It prints the subje
   bootstrap 95% CI (1000 seeded draws, subjects resampled with replacement — not timepoints).
 - `residual.png` — **the main figure**: r_self vs the group residual, each mean with a shaded
   **95% bootstrap CI**, and the same two curves **without global-signal regression** drawn thin
-  behind as a robustness overlay. x capped at n=10.
+  (teal) behind as a robustness overlay. x capped at n=10.
+- `emerge.png` — the residual result shown as **maps, not a curve**: one subject (the median by
+  residual, named), a 2×4 grid of correlation matrices, parcels sorted by Yeo-17 network with
+  block boundaries. Top row = the whole map from the first 1 / 5 / 20 / 45 min; bottom row = the
+  same with the leave-one-out group pattern subtracted. The whole map settles by ~5 min; the
+  individual part stays noisy at 45 — the finding, shown directly. Two colour scales, one per
+  row (a shared scale saturates the residual), each stated.
 - `curves.png` — one panel: r_self and the nearest impostor, each mean with a shaded 95%
   bootstrap CI; the gap between them is the individual signal. x capped at n=10 (45 min).
 - `sampling.png` / `sampling.csv` — three ways of drawing the X minutes (r_self; seeded):
