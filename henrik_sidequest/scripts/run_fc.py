@@ -766,26 +766,8 @@ def _sampling_figure(cur, n_sub) -> None:
     h, lab = axes[0].get_legend_handles_labels()
     ps.legend(axes[0], loc="lower right", handles=h[::-1], labels=lab[::-1])
 
-    # Factual block result: chunks share scattered's session spread and first's continuity, so
-    # where they land relative to the two says which factor is acting. They coincide with first
-    # at 1 min by construction, so only rungs >=3 min are informative.
-    mid = full & (np.array(mins) >= 3) & (np.array(mins) <= hi)
-    b, s, f = (cmean(modes["block"], "r_self"), cmean(modes["scatter"], "r_self"),
-               cmean(modes["first"], "r_self"))
-    lo, up = np.minimum(f, s), np.maximum(f, s)
-    frac_between = float(np.nanmean(((b >= lo - 1e-9) & (b <= up + 1e-9))[mid])) if mid.any() else 0.0
-    if frac_between >= 0.6:
-        l1 = "1-min chunks fall between first minutes and scattered at every rung"
-        l2 = "so both session variety and spread-out sampling contribute"
-    elif np.nanmean(np.abs(b - s)[mid]) < np.nanmean(np.abs(b - f)[mid]):
-        l1 = "1-min chunks track scattered timepoints, not first minutes"
-        l2 = "session variety dominates over spread-out sampling"
-    else:
-        l1 = "1-min chunks track first minutes, not scattered"
-        l2 = "spread-out sampling dominates over session variety"
-    subtitle = f"{l1}\n{l2}  (chunks meet first minutes at 1 min; compare from 3 min)  |  $N$ = {n_sub}"
-    ps.titles(fig, "Which minutes you use, and how they are spread across sessions",
-              subtitle, top=0.78)
+    ps.titles(fig, "Minutes versus data spread",
+              f"same total minutes across three ways of distributing them  |  $N$ = {n_sub} people")
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'sampling')}")
 
     import csv
