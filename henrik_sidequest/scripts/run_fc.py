@@ -767,13 +767,15 @@ def _sampling_figure(cur, n_sub) -> None:
 
 
 def _network_figure(cur, nb, target_min) -> None:
-    """Two panels: the mean reference FC with parcels sorted by Yeo-17 network (blocks line up
-    with named systems), and the 17x17 group-residual-per-block matrix at `target_min`."""
+    """Two panels: the mean reference FC with the 400 parcels sorted by Yeo-17 network, and the
+    17x17 group-residual-per-network-pair matrix at `target_min`. Both use the same colormap
+    (dark = more); the figure is sized large so the 17 network labels fit on the 400-parcel
+    panel without colliding."""
     ps.apply()
     nets, names, K = nb["nets"], nb["names"], len(nb["names"])
+    full_names = [config.network_label(nm) for nm in names]
     order = np.argsort(nets, kind="stable")           # parcels grouped by network
-    sorted_nets = nets[order]
-    sizes = [int(np.sum(sorted_nets == k)) for k in range(K)]
+    sizes = [int(np.sum(nets[order] == k)) for k in range(K)]
     bounds = np.cumsum(sizes)
     centers = bounds - np.array(sizes) / 2.0
 
@@ -792,34 +794,32 @@ def _network_figure(cur, nb, target_min) -> None:
             p, q = idx[r["a"]], idx[r["b"]]
             S[p, q] = S[q, p] = r["r_resid_reg"]
 
-    full_names = [config.network_label(nm) for nm in names]
-    fig, ax = ps.plt.subplots(1, 2, figsize=(ps.FULL, 3.5))
+    fig, ax = ps.plt.subplots(1, 2, figsize=(11.5, 6.2))
     vmax = float(np.nanmax(np.abs(Ms)))
-    im0 = ax[0].imshow(Ms, cmap=ps.SUNSET_DIV, vmin=-vmax, vmax=vmax)   # signed FC -> diverging
+    im0 = ax[0].imshow(Ms, cmap=ps.SUNSET_HI, vmin=-vmax, vmax=vmax)   # same colormap as (b)
     for b in bounds[:-1]:
         ax[0].axhline(b - 0.5, color="#888888", lw=0.3); ax[0].axvline(b - 0.5, color="#888888", lw=0.3)
-    for a in ax:
-        a.tick_params(length=0)
-    # Small systems have block centres only a few parcels apart, so 17 labels here collide.
-    # The boundary lines carry the grouping; the labels live on panel (b), same order.
-    ax[0].set_xticks([]); ax[0].set_yticks([])
-    ps.panel(ax[0], 0, "average connectivity, grouped by system (order as in b)")
+    ax[0].set_xticks(centers); ax[0].set_xticklabels(full_names, rotation=90, fontsize=ps.FS["tick"])
+    ax[0].set_yticks(centers); ax[0].set_yticklabels(full_names, fontsize=ps.FS["tick"])
+    ps.panel(ax[0], 0, "average connectivity, parcels sorted by network")
     ps.colorbar(fig, im0, ax[0])
 
     im1 = ax[1].imshow(S, cmap=ps.SUNSET_HI)   # dark = more
-    ax[1].set_xticks(range(K)); ax[1].set_xticklabels(full_names, rotation=90, fontsize=ps.FS["tick"] - 1)
-    ax[1].set_yticks(range(K)); ax[1].set_yticklabels(full_names, fontsize=ps.FS["tick"] - 1)
+    ax[1].set_xticks(range(K)); ax[1].set_xticklabels(full_names, rotation=90, fontsize=ps.FS["tick"])
+    ax[1].set_yticks(range(K)); ax[1].set_yticklabels(full_names, fontsize=ps.FS["tick"])
     ps.panel(ax[1], 1, f"match to own map, group removed ({target_min:.0f} min)")
     ps.colorbar(fig, im1, ax[1])
-    ps.titles(fig, "Average connectivity by system, and where individuality survives",
-              f"$N$ = {len(cur['subs'])} people  |  17 brain systems  |  at {target_min:.0f} min",
-              top=0.78)
+    for a in ax:
+        a.tick_params(length=0)
+    ps.titles(fig, "Connectivity by network, and where individuality survives",
+              f"$N$ = {len(cur['subs'])} people  |  Yeo-17 networks  |  at {target_min:.0f} min",
+              top=0.82)
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'networks')}")
 
 
 def _nettraj_figure(cur, nb, n_sub) -> None:
-    """Per-network group-residual reliability vs data: association systems coloured, the rest
-    grey, only the extreme few labelled (17 labelled lines would be unreadable)."""
+    """Per-network group-residual reliability vs data: association networks coloured, the rest
+    grey. All 17 in the legend, in the plot's own top-to-bottom order, coloured along that order."""
     ps.apply()
     _, _, hi, _ = _fig_range(cur, n_sub)
     names, assoc = nb["names"], set(config.ASSOCIATION)
@@ -828,31 +828,32 @@ def _nettraj_figure(cur, nb, n_sub) -> None:
     for r in nb["rows"]:
         if r["minutes"] > hi or not np.isfinite(r["r_resid_reg"]):
             continue
-        for nm in ({r["a"], r["b"]}):          # every block counts toward both its systems
+        for nm in ({r["a"], r["b"]}):          # every block counts toward both its networks
             acc[nm][r["minutes"]].append(r["r_resid_reg"])
     traj = {nm: np.array([np.mean(acc[nm][m]) if acc[nm][m] else np.nan for m in ms]) for nm in names}
     final = {nm: (traj[nm][-1] if len(ms) else np.nan) for nm in names}
+    # order = top-to-bottom in the plot (highest final value first); the legend and the colour
+    # gradient both follow it, so the palette runs dark->light down the ranking.
     order = sorted(names, key=lambda nm: (-final[nm] if np.isfinite(final[nm]) else np.inf))
-    assoc_names = [nm for nm in names if nm in assoc]
-    col = dict(zip(assoc_names, ps.sunset_colors(len(assoc_names))))
+    assoc_ranked = [nm for nm in order if nm in assoc]
+    col = dict(zip(assoc_ranked, list(reversed(ps.sunset_colors(len(assoc_ranked))))))
     line_color = lambda nm: col.get(nm, ps.GREY)
 
     from matplotlib.lines import Line2D
     fig, ax = ps.plt.subplots(figsize=(ps.FULL * 0.66, 3.4))
     for nm in names:                            # sensory / other: grey background
         if nm not in assoc:
-            ax.plot(ms, traj[nm], color=ps.GREY, lw=0.8, alpha=0.55)
-    for nm in assoc_names:                       # association: warm palette
-        ax.plot(ms, traj[nm], color=col[nm], lw=1.3)
-    # All 17 named, ranked high->low, in a legend OUTSIDE the axes (room now, nothing collides).
-    handles = [Line2D([], [], color=line_color(nm), lw=1.6, label=config.network_label(nm))
+            ax.plot(ms, traj[nm], color=ps.GREY, lw=0.9, alpha=0.6)
+    for nm in assoc_ranked:                       # association: warm palette along the ranking
+        ax.plot(ms, traj[nm], color=col[nm], lw=1.4)
+    handles = [Line2D([], [], color=line_color(nm), lw=1.8, label=config.network_label(nm))
                for nm in order]
     ax.legend(handles=handles, loc="center left", bbox_to_anchor=(1.02, 0.5),
               frameon=False, fontsize=ps.FS["legend"], labelcolor=ps.TICKINK,
-              title="systems, high → low", title_fontsize=ps.FS["legend"])
+              title="networks, high → low", title_fontsize=ps.FS["legend"])
     ax.set(xlabel="minutes of rest", ylabel="match to own map (group removed)", xlim=(0, hi))
     ps.style_ax(ax)
-    ps.titles(fig, "Individuality by brain system",
+    ps.titles(fig, "Individuality by network",
               f"$N$ = {n_sub} people  |  association coloured, sensory grey  |  to {hi:.0f} min")
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'nettraj')}")
 
