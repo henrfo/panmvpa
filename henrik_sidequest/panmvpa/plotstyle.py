@@ -34,13 +34,17 @@ SUNSET = LinearSegmentedColormap.from_list("sunset", [
     "#1B0504", "#5C1008", "#9C2810", "#CC5A20",
     "#E09040", "#EDBC70", "#F5DCA8",
 ])
-# Diverging variant for SIGNED data (e.g. correlation matrices with anticorrelation): the warm
-# sunset on one side, its cool complement on the other, white at zero. Use with symmetric limits
-# (vmin=-vmax) so white lands on 0. Sequential SUNSET everywhere the data is one-signed.
+# Sequential map with DARK = MORE (sunset reversed): light for low values, dark warm for high.
+# Use for one-signed heatmaps so the intuitive "darker = more" holds.
+SUNSET_HI = SUNSET.reversed()
+
+# Diverging variant for SIGNED data (correlation matrices with anticorrelation): the SAME warm
+# sunset on the positive side (dark = strong), a cool teal complement on the negative, white at
+# zero. Symmetric colours so white lands on 0 with vmin=-vmax. Reads as one family with SUNSET_HI.
 SUNSET_DIV = LinearSegmentedColormap.from_list("sunset_div", [
-    "#123A44", "#2C7A8C", "#5FA8B5", "#A9D3DA",   # cool complement (negative)
+    "#12343B", "#2C7A8C", "#5FA8B5", "#A9D3DA",   # negative: dark teal -> light (toward zero)
     "#FFFFFF",                                      # zero
-    "#F1C27A", "#E0903F", "#CC5A20", "#7A1F0C",    # warm sunset (positive)
+    "#F5DCA8", "#E09040", "#CC5A20", "#9C2810",   # positive: light -> dark sunset (same as SUNSET)
 ])
 ACCENT = "#CC5A20"              # mid-orange, the single accent
 GREY = "#999999"               # de-emphasised series

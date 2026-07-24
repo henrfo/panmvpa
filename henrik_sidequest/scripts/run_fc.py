@@ -166,8 +166,8 @@ def _diagnostic_figure(rec, sid, ses, run) -> Path:
     ax[1].plot(t, rec["dvars"], lw=0.9, color=ps.ACCENT)
     p = rec["parcels"].T
     p = p - p.mean(axis=1, keepdims=True)   # demean each parcel so fluctuations show
-    ax[2].imshow(p, aspect="auto", cmap=ps.SUNSET,
-                 vmin=np.percentile(p, 2), vmax=np.percentile(p, 98),
+    lim = float(np.percentile(np.abs(p), 98))
+    ax[2].imshow(p, aspect="auto", cmap=ps.SUNSET_DIV, vmin=-lim, vmax=lim,
                  extent=[0, t[-1], 400, 0])
     for j, name in enumerate(("whole-brain mean", "DVARS", "400 parcels, demeaned")):
         ps.panel(ax[j], j, name)
@@ -806,7 +806,7 @@ def _network_figure(cur, nb, target_min) -> None:
     ps.panel(ax[0], 0, "average connectivity, grouped by system (order as in b)")
     ps.colorbar(fig, im0, ax[0])
 
-    im1 = ax[1].imshow(S, cmap=ps.SUNSET)
+    im1 = ax[1].imshow(S, cmap=ps.SUNSET_HI)   # dark = more
     ax[1].set_xticks(range(K)); ax[1].set_xticklabels(full_names, rotation=90, fontsize=ps.FS["tick"] - 1)
     ax[1].set_yticks(range(K)); ax[1].set_yticklabels(full_names, fontsize=ps.FS["tick"] - 1)
     ps.panel(ax[1], 1, f"match to own map, group removed ({target_min:.0f} min)")
