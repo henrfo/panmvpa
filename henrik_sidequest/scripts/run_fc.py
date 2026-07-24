@@ -240,6 +240,15 @@ def _corr(u: np.ndarray, v: np.ndarray) -> float:
     return float(np.corrcoef(u, v)[0, 1])
 
 
+def _regress_out(x: np.ndarray, g: np.ndarray) -> np.ndarray:
+    """Residual of x after removing its projection onto g (mean-centred): x_c − β·g_c. Unlike
+    x − g, this discards the whole along-g direction, so a uniform rescaling of g leaves ~0 —
+    global amplitude differences don't survive as individuality."""
+    xc, gc = x - x.mean(), g - g.mean()
+    d = float(gc @ gc)
+    return xc - (float(xc @ gc) / d) * gc if d > 0 else xc
+
+
 def _colmean(mat: np.ndarray) -> np.ndarray:
     """Column mean over the rows that are finite, NaN where a column is entirely NaN --
     without np.nanmean's empty-slice warning."""
@@ -264,27 +273,45 @@ def identity_curves(sess: dict[str, dict[int, list[dict]]], gsr: bool) -> dict:
                      can rise while signal falls -- misleading)
         hit(X)     = r_self > near -- A's own half is the top match => identified (will ceiling)
 
-    near, floor and everything else come from the SAME cross-correlations -- one loop. Every
-    per-subject quantity is formed before averaging, never mean-of-one minus mean-of-another.
+    Because r_self is dominated by shared "this is a human cortex" structure (two strangers
+    already agree ~0.6), we also residualise both sides against the group before correlating --
+    the reliability of the DEVIATION from the group, which is what precision fMRI cares about:
+
+        g1 = leave-one-out mean of the OTHER subjects' FULL FIRST halves
+        g2 = leave-one-out mean of the OTHER subjects' FULL SECOND halves   (independent of g1,
+             so its estimation error is not shared across the two sides and cannot inflate r)
+        r_resid_sub(X) = corr( A(X) - g1,             ref(s) - g2 )          # plain subtraction
+        r_resid_reg(X) = corr( regress_out(A(X), g1), regress_out(ref(s), g2) )  # projection out
+
+    Subtraction leaves global amplitude in (uniformly stronger connectivity reads as
+    individuality); regression removes it. If the two differ, some "individuality" is scaling.
     """
     subs = sorted(sess)
-    first_half, ref_edges = {}, {}
+    first_half, first_edges, ref_edges = {}, {}, {}
     for sid in subs:
         runs = [r for ses in sorted(sess[sid]) for r in sess[sid][ses]]
         X = np.concatenate([clean_run(r, gsr) for r in runs], axis=0)
         h = X.shape[0] // 2
         first_half[sid] = X[:h]
+        first_edges[sid] = fc_edges(X[:h])          # full first half, for the group template g1
         ref_edges[sid] = fc_edges(X[h:])
 
-    keys = ("r_self", "near", "floor", "signal", "hit")
+    # Leave-one-out group templates: g1[s] excludes s, from FIRST halves; g2[s] from SECOND.
+    n = len(subs)
+    sum1 = np.sum([first_edges[s] for s in subs], axis=0) if n else None
+    sum2 = np.sum([ref_edges[s] for s in subs], axis=0) if n else None
+    g1 = {s: (sum1 - first_edges[s]) / (n - 1) for s in subs} if n >= 2 else {}
+    g2 = {s: (sum2 - ref_edges[s]) / (n - 1) for s in subs} if n >= 2 else {}
+
+    keys = ("r_self", "near", "floor", "signal", "hit", "r_resid_sub", "r_resid_reg")
     per = {k: {s: np.full(len(LADDER), np.nan) for s in subs} for k in keys}
     for sid in subs:
         a = first_half[sid]
         for i, m in enumerate(LADDER):
-            n = int(round(m * 60.0 / TR))
-            if not (MIN_TP <= n <= a.shape[0]):      # only points the subject truly has
+            npt = int(round(m * 60.0 / TR))
+            if not (MIN_TP <= npt <= a.shape[0]):    # only points the subject truly has
                 continue
-            grow = fc_edges(a[:n])
+            grow = fc_edges(a[:npt])
             rs = _corr(grow, ref_edges[sid])
             per["r_self"][sid][i] = rs
             cross = [_corr(grow, ref_edges[b]) for b in subs if b != sid]
@@ -294,10 +321,15 @@ def identity_curves(sess: dict[str, dict[int, list[dict]]], gsr: bool) -> dict:
                 per["floor"][sid][i] = float(np.mean(cross))
                 per["signal"][sid][i] = rs - near
                 per["hit"][sid][i] = float(rs > near)
+            if sid in g1:
+                per["r_resid_sub"][sid][i] = _corr(grow - g1[sid], ref_edges[sid] - g2[sid])
+                per["r_resid_reg"][sid][i] = _corr(_regress_out(grow, g1[sid]),
+                                                   _regress_out(ref_edges[sid], g2[sid]))
 
     stack = lambda k: np.vstack([per[k][s] for s in subs])
     out = {"minutes": LADDER, "subs": subs, "per": per,
-           "first_half": first_half, "ref_edges": ref_edges,   # reused by the network breakdown
+           "first_half": first_half, "first_edges": first_edges, "ref_edges": ref_edges,
+           "g1": g1, "g2": g2,                                  # reused by the network breakdown
            "n": np.sum(~np.isnan(stack("r_self")), axis=0)}
     for k in keys:
         out[k + "_mean"] = _colmean(stack(k))   # hit_mean == hit rate (mean of 0/1)
@@ -320,10 +352,14 @@ def _parcel_networks() -> tuple[np.ndarray, list[str]]:
 
 def network_breakdown(cur: dict, minutes_list) -> dict:
     """Split the FC edge vector by Yeo-17 network pair and compute the subject-mean r_self /
-    nearest / signal per block at every rung in `minutes_list`. Reuses the cleaned first halves
-    and reference edges from identity_curves (no re-cleaning). Returns long-format rows.
+    nearest / signal per block at every rung, plus the group-residual reliability per block
+    (r_resid_sub / r_resid_reg) -- the same leave-one-out residualisation as the main curves,
+    which unconfounds the per-network ranking from how much group structure each block carries.
+    Reuses the cached first/second halves and group templates from identity_curves.
     """
-    subs, first_half, ref_edges = cur["subs"], cur["first_half"], cur["ref_edges"]
+    subs, first_half, first_edges, ref_edges = (cur["subs"], cur["first_half"],
+                                                cur["first_edges"], cur["ref_edges"])
+    g1, g2 = cur["g1"], cur["g2"]
     nets, names = _parcel_networks()
     K = len(names)
     iu = np.triu_indices(config.N_PARCELS, k=1)
@@ -341,15 +377,20 @@ def network_breakdown(cur: dict, minutes_list) -> dict:
         if len(valid) < 2:                       # need >=2 for a nearest impostor
             continue
         for (p, q), idx in block_idx.items():
-            rs_l, nr_l, sg_l = [], [], []
+            rs_l, nr_l, sg_l, sub_l, reg_l = [], [], [], [], []
             for s in valid:
                 gb, sb = grow[s][idx], ref_edges[s][idx]
                 rs = _corr(gb, sb)
                 near = max(_corr(gb, ref_edges[b][idx]) for b in valid if b != s)
                 rs_l.append(rs); nr_l.append(near); sg_l.append(rs - near)
+                if s in g1:                       # block-restricted group residual, both variants
+                    g1b, g2b = g1[s][idx], g2[s][idx]
+                    sub_l.append(_corr(gb - g1b, sb - g2b))
+                    reg_l.append(_corr(_regress_out(gb, g1b), _regress_out(sb, g2b)))
+            mean = lambda v: float(np.mean(v)) if v else float("nan")
             rows.append({"a": names[p], "b": names[q], "minutes": float(m), "n": len(valid),
-                         "r_self": float(np.mean(rs_l)), "nearest": float(np.mean(nr_l)),
-                         "signal": float(np.mean(sg_l))})
+                         "r_self": mean(rs_l), "nearest": mean(nr_l), "signal": mean(sg_l),
+                         "r_resid_sub": mean(sub_l), "r_resid_reg": mean(reg_l)})
     return {"rows": rows, "names": names, "nets": nets}
 
 
@@ -360,24 +401,29 @@ def _write_curves_csv(cur, n_sub, path) -> None:
     cell = lambda x: f"{x:.6f}" if np.isfinite(x) else ""
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["subject", "minutes", "n", "r_self", "nearest", "floor", "signal"])
+        w.writerow(["subject", "minutes", "n", "r_self", "nearest", "floor", "signal",
+                    "r_resid_sub", "r_resid_reg"])
         for s in cur["subs"]:
             for i, m in enumerate(mins):
                 rself = cur["per"]["r_self"][s][i]
                 if not np.isfinite(rself):
                     continue
-                w.writerow([s, m, int(npr[i]), cell(rself), cell(cur["per"]["near"][s][i]),
-                            cell(cur["per"]["floor"][s][i]), cell(cur["per"]["signal"][s][i])])
+                p = cur["per"]
+                w.writerow([s, m, int(npr[i]), cell(rself), cell(p["near"][s][i]),
+                            cell(p["floor"][s][i]), cell(p["signal"][s][i]),
+                            cell(p["r_resid_sub"][s][i]), cell(p["r_resid_reg"][s][i])])
 
 
 def _write_network_csv(rows, path) -> None:
     import csv
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["network_a", "network_b", "minutes", "r_self", "nearest", "signal"])
+        w.writerow(["network_a", "network_b", "minutes", "r_self", "nearest", "signal",
+                    "r_resid_sub", "r_resid_reg"])
+        cell = lambda x: f"{x:.6f}" if np.isfinite(x) else ""
         for r in rows:
-            w.writerow([r["a"], r["b"], r["minutes"],
-                        f"{r['r_self']:.6f}", f"{r['nearest']:.6f}", f"{r['signal']:.6f}"])
+            w.writerow([r["a"], r["b"], r["minutes"], cell(r["r_self"]), cell(r["nearest"]),
+                        cell(r["signal"]), cell(r["r_resid_sub"]), cell(r["r_resid_reg"])])
 
 
 # SVM ladder is separate from the overlap ladder and capped: an example eats X minutes, so
@@ -494,9 +540,9 @@ def stage_analyze(subjects, run_svm: bool = False) -> None:
     rs, near, floor = cur["r_self_mean"], cur["near_mean"], cur["floor_mean"]
     sig, hit = cur["signal_mean"], cur["hit_mean"]
 
-    # The honest range is the rungs every subject reaches. Past it the mean is carried by a
-    # shrinking, self-selected few (the 80-min point can be one person), so slopes and the
-    # 90%-of-final normalisation are computed there, and the plot de-emphasises it.
+    # The full-cohort range is the rungs every subject reaches; past it the mean is carried by
+    # a shrinking, self-selected few (the 80-min point can be one person), so the figures cap
+    # the x-axis there.
     full = npr == n_sub
     fi = np.where(full)[0]
     hi_full = float(mins[fi[-1]]) if len(fi) else float("nan")
@@ -534,6 +580,8 @@ def stage_analyze(subjects, run_svm: bool = False) -> None:
     print(f"\ncsv -> {curves_csv}")
     _analysis_figure(cur, n_sub)
     _sampling_figure(cur, n_sub)          # x-axis check: first vs random X min
+    if n_sub >= 2:
+        _residual_figure(cur, n_sub)      # the main analysis: reliability of the group residual
 
     if n_sub >= 2:
         nb = network_breakdown(cur, mins)
@@ -573,6 +621,37 @@ def _analysis_figure(cur, n_sub) -> None:
     fig.tight_layout()
     config.FC_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out = config.FC_RESULTS_DIR / "curves.png"
+    fig.savefig(out, dpi=120); plt.close(fig)
+    print(f"figure -> {out}")
+
+
+def _residual_figure(cur, n_sub) -> None:
+    """The main analysis: r_self (dominated by shared 'human cortex' structure) against r_resid,
+    the reliability of the deviation from the group. Both residual variants (subtract g, regress
+    g out); a thin line per subject behind r_self and the regression residual; x capped at n=n_sub."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    mins, npr = cur["minutes"], cur["n"]
+    full = npr == n_sub
+    fi = np.where(full)[0]
+    hi = float(mins[fi[-1]]) if len(fi) else float(mins[-1])
+    seg = lambda y: (np.where(full, mins, np.nan), np.where(full, y, np.nan))
+    cmean = lambda k: _colmean(np.vstack([cur["per"][k][s] for s in cur["subs"]]))
+
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    for s in cur["subs"]:
+        ax.plot(mins, cur["per"]["r_self"][s], color="C0", lw=0.5, alpha=0.18)
+        ax.plot(mins, cur["per"]["r_resid_reg"][s], color="C3", lw=0.5, alpha=0.18)
+    ax.plot(*seg(cmean("r_self")), "o-", color="C0", lw=2, label="r_self (raw)")
+    ax.plot(*seg(cmean("r_resid_reg")), "o-", color="C3", lw=2, label="r_resid (regress g out)")
+    ax.plot(*seg(cmean("r_resid_sub")), "s--", color="C1", lw=1.5, label="r_resid (subtract g)")
+    ax.axhline(0, color="0.7", lw=0.8)
+    ax.set(xlabel="minutes of rest (linear)", ylabel="FC edge correlation (r)",
+           title=f"Group-residual reliability vs r_self (n={n_sub}, to {hi:.0f} min)", xlim=(0, hi))
+    ax.legend(fontsize=8, loc="right")
+    fig.tight_layout()
+    out = config.FC_RESULTS_DIR / "residual.png"
     fig.savefig(out, dpi=120); plt.close(fig)
     print(f"figure -> {out}")
 

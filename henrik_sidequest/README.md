@@ -111,6 +111,24 @@ against every subject's full reference half:
 - **hit rate** — was r_self the top match of all subjects? Reported, but it ceilings like the
   SVM, so it isn't the headline.
 
+**The main analysis — reliability of the group residual.** r_self is dominated by shared "this
+is a human cortex" structure (two strangers agree ~0.6, and r_self/floor is a near-constant
+~1.5 across the ladder — the group and individual components are estimated in fixed proportion,
+so that ratio is a scaling constant, not differential accrual). Precision fMRI cares about the
+deviation from the group, so residualise **both** sides against it before correlating:
+
+- **g1** = leave-one-out mean of the *other* subjects' full **first** halves; **g2** = the same
+  from their **second** halves. Different g per side (independent estimation error), so g's noise
+  is not shared across the two sides and cannot inflate r.
+- **r_resid_sub(X)** = `corr(A(X) − g1, ref(s) − g2)` — plain subtraction; leaves global
+  amplitude in (uniformly stronger connectivity reads as individuality).
+- **r_resid_reg(X)** = same with the projection onto g **regressed out** — removes global
+  scaling. If the two variants differ a lot, some "individuality" is global amplitude.
+
+Both variants are per subject per rung in `curves.csv` and per network block in `networks.csv`
+(the raw per-network ranking is confounded by how much group structure each block carries; on
+residuals it is a cleaner question). This is a different question from the sampling check below.
+
 The n<10 tail (at 80 min, a single subject with the most rest) is **de-emphasised** in the
 figure — bold only over the full-cohort rungs, the sparse tail greyed — so the highest point
 on the chart isn't one person.
@@ -127,19 +145,22 @@ survives changes to the metric it came from; a CSV doesn't). It prints the subje
 (r_self / nearest / floor / signal / hit%) and the SVM table, and writes:
 
 - `curves.csv` — long format, one row per (subject, minutes): `subject, minutes, n, r_self,
-  nearest, floor, signal`. The **per-subject** curves behind the means; 90% minutes, slopes,
-  crossover are all computed from this in a notebook.
+  nearest, floor, signal, r_resid_sub, r_resid_reg`. The **per-subject** curves behind the
+  means; any summary (90% minutes, crossover, spreads) is computed from this in a notebook.
 - `networks.csv` — long format per network block: `network_a, network_b, minutes, r_self,
-  nearest, signal` (subject-mean per Yeo-17 pair, every rung).
+  nearest, signal, r_resid_sub, r_resid_reg` (subject-mean per Yeo-17 pair, every rung).
+- `residual.png` — **the main figure**: r_self against both residual variants on one axis, thin
+  line per subject behind, x capped at n=10.
 - `curves.png` — one panel: r_self and the nearest impostor, the individual signal shaded
   between them (the shaded gap *is* the signal, so it isn't plotted twice), a thin line per
   subject behind each, x capped at the last rung every subject reaches (n=10, 45 min).
-- `sampling.png` / `sampling.csv` — x-axis confound check. The growing sample is normally the
-  **first** X minutes, so early rungs are one session and late rungs span many — which mixes
-  "more data" with "more sessions." This overlays r_self and signal for first-X-min against
-  **random** X min sampled across the whole first half (every rung spans all sessions; seeded,
-  reproducible). Curves that agree mean the axis is amount-of-data; a split at low X means it
-  is partly session-span.
+- `sampling.png` / `sampling.csv` — **first** X minutes vs **random** X minutes (sampled across
+  the whole first half; seeded, reproducible), for r_self and signal. These answer *different*
+  questions and both are reported: first-minutes is what you can actually collect (start
+  scanning now and you get exactly this); random holds session-diversity at maximum, which no
+  one can buy without running the sessions. The **gap between them** is the result — how much of
+  early unreliability is "not enough data" vs "only one day sampled." A separate question from
+  the residual analysis above.
 - `networks.png` — the mean reference FC with the 400 parcels **sorted by Yeo-17 network**
   (blocks line up with named systems) beside the 17×17 signal-per-block matrix at the last
   full-cohort rung.
