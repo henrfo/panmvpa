@@ -117,8 +117,14 @@ computed over the full-cohort range only, and the plot greys those rungs so the 
 on the chart isn't one person. Headline numbers over that range: the **crossover** (own-data
 minutes until r_self beats a stranger's stable map), and minutes to **90%** of r_self
 (reliability) and of the signal (distinctiveness) **separately** — normalised to each curve's
-value at the last full-cohort rung, no fitted asymptote. Whether those two land together or
-apart is the result.
+value at the last full-cohort rung. That value is **not a fitted asymptote**: the output
+states the terminal slope and whether either curve has actually plateaued there (on this
+cohort neither has by 45 min, so the minute grows with more rest).
+
+Both the mean *and* **per subject**: the 90% minute for r_self and for signal is printed for
+every subject with the spread across the cohort. Whether reliability and distinctiveness
+co-saturate is a within-subject question, and a mean minutes-recommendation is only real if
+the spread is tight — otherwise it is averaging a 15-min subject with a 60-min one.
 
 - **SVM (second method)** — one example = *X* minutes labelled by subject; grow *X*, retrain,
   record the **margin**. Held out by **whole session**, never random minutes; examples

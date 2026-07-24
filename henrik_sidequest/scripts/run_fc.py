@@ -483,32 +483,73 @@ def stage_analyze(subjects) -> None:
             why = "need >=2 subjects" if n_sub < 2 else f"only {r['per_sub']} example(s)/subj — too few"
             print(f"  {r['min']:4.1f}  {r['n']:3d}          {used:>4}  ({why})")
 
-    # Headline: reliability (r_self) and distinctiveness (signal) reported separately, each to
-    # 90% of its own value AT THE LAST FULL-COHORT RUNG (not the n<10 tail, which is inflated).
-    def t90_full(vv):
-        if not len(fi):
-            return float("nan"), float("nan")
-        fin = float(vv[fi[-1]])
-        if not np.isfinite(fin):
-            return float("nan"), float("nan")
-        # only search within the full-cohort range so a sparse-tail value can't set the target
+    # 90% minute of a curve, normalised to its value at the last full-cohort rung (NOT the
+    # n<10 tail, NOT a fitted asymptote) and searched only within the full-cohort range.
+    fmt = lambda x: f"{x:.1f} min" if np.isfinite(x) else "n/a"
+    def t90(vv):
+        if not len(fi) or not np.isfinite(vv[fi[-1]]):
+            return float("nan")
+        target = 0.9 * float(vv[fi[-1]])
         capped = np.where(full, vv, np.nan)
-        return _reaches(mins, capped, 0.9 * fin), fin
-    fmt = lambda x: f"{x:.1f} min" if np.isfinite(x) else "n/a (need more subjects/data)"
-    t_self, self_fin = t90_full(rs)
-    t_sig, sig_fin = t90_full(sig)
+        if capped[fi[0]] >= target:          # already at 90% by the first rung
+            return float(mins[fi[0]])
+        return _reaches(mins, capped, target)
+
+    self_fin = float(rs[fi[-1]]) if len(fi) else float("nan")
+    sig_fin = float(sig[fi[-1]]) if len(fi) else float("nan")
+    t_self, t_sig = t90(rs), t90(sig)
     bfloor = float(floor[fi[-1]]) if len(fi) else float("nan")
     crossover = _reaches(mins, rs, bfloor) if np.isfinite(bfloor) else float("nan")
     hits = np.where((hit >= 1.0) & (npr >= 2))[0]
-    print(f"\nheadline numbers (over the n={n_sub} range, to {hi_full:.0f} min):")
+    print(f"\nheadline (MEAN over n={n_sub}, to {hi_full:.0f} min):")
     print(f"  crossover (r_self beats stable group floor {bfloor:.3f}): {fmt(crossover)}"
           if np.isfinite(bfloor) else "  crossover: n/a (need >=2 subjects)")
-    print(f"  r_self (reliability)   to 90% of its {self_fin:.3f}: {fmt(t_self)}"
-          if np.isfinite(self_fin) else "  r_self to 90%: n/a")
-    print(f"  signal (distinctiveness) to 90% of its {sig_fin:+.3f}: {fmt(t_sig)}"
-          if np.isfinite(sig_fin) else "  signal to 90%: n/a")
+    if np.isfinite(self_fin):
+        print(f"  r_self (reliability)     to 90% of its {hi_full:.0f}-min value {self_fin:.3f}: {fmt(t_self)}")
+        print(f"  signal (distinctiveness) to 90% of its {hi_full:.0f}-min value {sig_fin:+.3f}: {fmt(t_sig)}")
     if len(hits):
         print(f"  nearest-neighbour hit rate reaches 100% at: {mins[hits[0]]:.1f} min (ceilings)")
+
+    # State plainly: this is anchored to the last full-cohort rung, not an asymptote, and
+    # whether the curves have actually plateaued there is read off the terminal slope.
+    if len(fi) >= 2:
+        es = _slope(mins, rs, float(mins[fi[-2]]), hi_full)
+        eg = _slope(mins, sig, float(mins[fi[-2]]), hi_full)
+        rise = lambda s: "still rising" if s > 1e-3 else ("flat" if abs(s) <= 1e-3 else "falling")
+        print(f"  NOTE: 'final' = the {hi_full:.0f}-min value (last full-cohort rung), NOT a fitted asymptote.")
+        status = (f"r_self {rise(es)} {es:+.4f}/min, signal {rise(eg)} {eg:+.4f}/min")
+        if es > 1e-3 or eg > 1e-3:
+            print(f"        Neither curve has plateaued by {hi_full:.0f} min ({status}); "
+                  f"the 90% minute would grow with more rest.")
+        else:
+            print(f"        Both curves have ~flattened by {hi_full:.0f} min ({status}).")
+
+    # Per subject, not just the mean: is a minutes recommendation real, or is the mean
+    # averaging someone who saturates at 15 min with someone at 60? Each subject to 90% of its
+    # OWN last-full-cohort-rung value, within the full-cohort range. (Curves are behind the mean.)
+    print(f"\nper-subject 90% minute (each vs its OWN {hi_full:.0f}-min value):")
+    print("  subject     r_self    signal")
+    ps_self, ps_sig = [], []
+    for s in cur["subs"]:
+        ts, tg = t90(cur["per"]["r_self"][s]), t90(cur["per"]["signal"][s])
+        ps_self.append(ts); ps_sig.append(tg)
+        print(f"  {s:9s} {fmt(ts):>9} {fmt(tg):>9}")
+
+    def spread(vals, label):
+        v = np.array([x for x in vals if np.isfinite(x)])
+        if not len(v):
+            print(f"  {label}: n/a"); return
+        print(f"  {label}: median {np.median(v):.1f} min, range {v.min():.1f}–{v.max():.1f} "
+              f"({v.max() - v.min():.1f} min spread across {len(v)} subjects)")
+    print()
+    spread(ps_self, "r_self 90%")
+    spread(ps_sig, "signal 90%")
+    if np.isfinite(t_self) and np.isfinite(t_sig):
+        both_close = abs(np.nanmedian([a - b for a, b in zip(ps_self, ps_sig)
+                                       if np.isfinite(a) and np.isfinite(b)]))
+        print(f"  within-subject: reliability and distinctiveness saturate "
+              f"{'together' if both_close < 3 else 'at different times'} "
+              f"(median |r_self−signal| = {both_close:.1f} min)")
 
     _analysis_figure(cur, table, n_sub)
 
