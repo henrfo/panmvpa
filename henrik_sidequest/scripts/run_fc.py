@@ -595,7 +595,7 @@ def stage_analyze(subjects, run_svm: bool = False) -> None:
     if n_sub >= 2:
         cur_off = identity_curves(sess, gsr=False)     # robustness overlay: global signal kept
         _residual_figure(cur, n_sub, cur_off)          # the main analysis: group-residual reliability
-        _emerge_figure(cur, n_sub)                     # the residual result shown as maps
+        _emerge_figure(cur, sess)                      # one subject's map filling in, out to 90 min
         # Headline numbers at the last full-cohort rung, with subject-bootstrap 95% CI.
         fi_full = np.where(cur["n"] == n_sub)[0]
         if len(fi_full):
@@ -893,26 +893,25 @@ def _nettraj_figure(cur, nb, n_sub) -> None:
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'nettraj')}")
 
 
-def _emerge_figure(cur, n_sub) -> None:
+def _emerge_figure(cur, sess) -> None:
     """The residual result shown as maps, not a curve: one subject, a 2xC grid of correlation
     matrices, parcels sorted by Yeo-17 network with block boundary lines. Top row = the whole map
-    from the first 1/5/20/45 min; bottom row = the same with the leave-one-out group pattern
+    from the first 1/5/20/45/90 min; bottom row = the same with the leave-one-out group pattern
     (others' second halves) subtracted. The top row settles by ~5 min; the bottom stays noisy --
     that is the residual finding shown directly. Two colour scales, one per row (a shared scale
-    would saturate the residual). Subject = the one with the MEDIAN residual, named, so it reads
-    as one person, not an average."""
+    would saturate the residual). Subject = the one with the MOST rest data, named; the map grows
+    over that subject's FULL rest so it can reach 90 min -- an illustrative range beyond the
+    analysis's first-half convention, not a cohort claim."""
     ps.apply()
     subs = cur["subs"]
-    fi = np.where(cur["n"] == n_sub)[0]
-    if not len(fi):
+    if not subs:
         return
-    ri = fi[-1]                                   # last full-cohort rung (45 min on the cohort)
-    ranked = sorted((s for s in subs if np.isfinite(cur["per"]["r_resid_reg"][s][ri])),
-                    key=lambda s: cur["per"]["r_resid_reg"][s][ri])
-    if not ranked:
+    s = max(subs, key=lambda x: cur["first_half"][x].shape[0])   # most rest data
+    g = cur["g2"].get(s)
+    if g is None:
         return
-    s = ranked[len(ranked) // 2]                  # median individual signal
-    a, g = cur["first_half"][s], cur["g2"][s]
+    runs = [r for ses in sorted(sess[s]) for r in sess[s][ses]]   # full rest -> reach 90 min
+    X = np.concatenate([clean_run(r, gsr=True) for r in runs], axis=0)
 
     nets, names = _parcel_networks()
     order = np.argsort(nets, kind="stable")
@@ -926,10 +925,10 @@ def _emerge_figure(cur, n_sub) -> None:
         np.fill_diagonal(M, np.nan)               # self-correlation isn't structure
         return M[np.ix_(order, order)]
 
-    cols = [m for m in (1, 5, 20, 45) if int(round(m * 60.0 / TR)) <= a.shape[0]]
+    cols = [m for m in (1, 5, 20, 45, 90) if int(round(m * 60.0 / TR)) <= X.shape[0]]
     whole, resid = [], []
     for m in cols:
-        e = fc_edges(a[: int(round(m * 60.0 / TR))])
+        e = fc_edges(X[: int(round(m * 60.0 / TR))])
         whole.append(mat(e)); resid.append(mat(e - g))   # subtract the group pattern
     vt = float(np.nanpercentile(np.abs(whole[-1]), 98))   # scale from the most-data map, per row
     vb = float(np.nanpercentile(np.abs(resid[-1]), 98))
@@ -937,9 +936,9 @@ def _emerge_figure(cur, n_sub) -> None:
 
     # Dedicated colorbar cell per row (a narrow last column) so nothing overlaps the panels.
     C = len(cols)
-    fig = ps.plt.figure(figsize=(ps.FULL, 4.5))
+    fig = ps.plt.figure(figsize=(ps.FULL, 3.4))
     gs = fig.add_gridspec(2, C + 1, width_ratios=[1] * C + [0.045],
-                          left=0.06, right=0.93, top=0.80, bottom=0.06, wspace=0.16, hspace=0.22)
+                          left=0.06, right=0.93, top=0.78, bottom=0.05, wspace=0.16, hspace=0.22)
     for i, (rlab, mats, vmax) in enumerate((("whole map", whole, vt),
                                             ("individual part", resid, vb))):
         im = None
@@ -956,10 +955,10 @@ def _emerge_figure(cur, n_sub) -> None:
                 ax.set_ylabel(rlab, fontsize=ps.FS["label"])
         cb = fig.colorbar(im, cax=fig.add_subplot(gs[i, C]))
         cb.outline.set_visible(False); cb.ax.tick_params(length=0, labelsize=ps.FS["tick"])
-    fig.suptitle("One person's map (with and without the group pattern)",
+    fig.suptitle("How one person's map fills in as data accumulates",
                  fontsize=ps.FS["title"], fontweight="bold", color=ps.INK, y=0.99, va="top")
-    fig.text(0.5, 0.90, f"subject {config.sub_id(s)} (median individual part)  |  parcels sorted "
-             f"by Yeo-17 network  |  colour ±{vt:.2f} (top), ±{vb:.2f} (bottom)  |  $N$ = {n_sub}",
+    fig.text(0.5, 0.89, f"{config.sub_id(s)}, one subject out to 90 min (illustrative)  |  "
+             f"colour scale ±{vt:.2f} (top), ±{vb:.2f} (bottom)",
              ha="center", va="top", fontsize=ps.FS["subtitle"], color=ps.SUBINK)
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'emerge')}")
 
