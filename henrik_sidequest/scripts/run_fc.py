@@ -768,9 +768,11 @@ def _sampling_figure(cur, n_sub) -> None:
 
 def _network_figure(cur, nb, target_min) -> None:
     """Two panels: the mean reference FC with the 400 parcels sorted by Yeo-17 network, and the
-    17x17 group-residual-per-network-pair matrix at `target_min`. Both use the same colormap
-    (dark = more); the figure is sized large so the 17 network labels fit on the 400-parcel
-    panel without colliding."""
+    17x17 group-residual-per-network-pair matrix at `target_min`. They are different quantities,
+    so different colormaps: (a) is signed (anticorrelation is real structure -- e.g. default vs
+    dorsal-attention -- and must not merge with zero) so it is diverging with white at 0; (b) is
+    one-signed so it is sequential, dark = more. The figure is sized large so the 17 network
+    labels fit on the 400-parcel panel without colliding."""
     ps.apply()
     nets, names, K = nb["nets"], nb["names"], len(nb["names"])
     full_names = [config.network_label(nm) for nm in names]
@@ -796,7 +798,7 @@ def _network_figure(cur, nb, target_min) -> None:
 
     fig, ax = ps.plt.subplots(1, 2, figsize=(11.5, 6.2))
     vmax = float(np.nanmax(np.abs(Ms)))
-    im0 = ax[0].imshow(Ms, cmap=ps.SUNSET_HI, vmin=-vmax, vmax=vmax)   # same colormap as (b)
+    im0 = ax[0].imshow(Ms, cmap=ps.SUNSET_DIV, vmin=-vmax, vmax=vmax)   # signed -> diverging, white at 0
     for b in bounds[:-1]:
         ax[0].axhline(b - 0.5, color="#888888", lw=0.3); ax[0].axvline(b - 0.5, color="#888888", lw=0.3)
     ax[0].set_xticks(centers); ax[0].set_xticklabels(full_names, rotation=90, fontsize=ps.FS["tick"])
