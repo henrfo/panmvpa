@@ -739,7 +739,7 @@ def _sampling_figure(cur, n_sub) -> None:
     scatter vs block separates effective-DOF from session diversity: if the scatter gap collapses
     onto block it was DOF; if block still sits well above first, it's sessions."""
     ps.apply()
-    # Legend order (top -> bottom): first minutes, 1-min chunks, scattered timepoints.
+    # Legend order (top -> bottom): scattered timepoints, 1-min chunks, first minutes.
     modes = {"first": cur["per"],
              "block": _resampled_curves(cur, _draw_block),
              "scatter": _resampled_curves(cur, _draw_scatter)}
@@ -760,7 +760,8 @@ def _sampling_figure(cur, n_sub) -> None:
         ps.style_ax(ax)
         ps.panel(ax, j, "vs own other half" if metric == "r_self" else "individual signal")
     axes[0].set_ylabel("correlation between maps")
-    ps.legend(axes[0], loc="lower right")
+    h, lab = axes[0].get_legend_handles_labels()
+    ps.legend(axes[0], loc="lower right", handles=h[::-1], labels=lab[::-1])
 
     # Factual block result: chunks share scattered's session spread and first's continuity, so
     # where they land relative to the two says which factor is acting. They coincide with first
