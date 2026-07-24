@@ -131,9 +131,9 @@ survives changes to the metric it came from; a CSV doesn't). It prints the subje
   crossover are all computed from this in a notebook.
 - `networks.csv` — long format per network block: `network_a, network_b, minutes, r_self,
   nearest, signal` (subject-mean per Yeo-17 pair, every rung).
-- `curves.png` — two panels, shared linear x, thin line per subject behind each bold mean, tail
-  greyed: **top** r_self and the group floor with the gap shaded (nearest impostor a thin
-  reference); **bottom** the individual signal.
+- `curves.png` — one panel: r_self and the nearest impostor, the individual signal shaded
+  between them (the shaded gap *is* the signal, so it isn't plotted twice), a thin line per
+  subject behind each, x capped at the last rung every subject reaches (n=10, 45 min).
 - `networks.png` — the mean reference FC with the 400 parcels **sorted by Yeo-17 network**
   (blocks line up with named systems) beside the 17×17 signal-per-block matrix at the last
   full-cohort rung.

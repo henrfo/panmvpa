@@ -544,53 +544,31 @@ def stage_analyze(subjects, run_svm: bool = False) -> None:
 
 
 def _analysis_figure(cur, n_sub) -> None:
+    """One panel: r_self and the nearest impostor, the individual signal shaded between them
+    (plotting the gap and the signal separately just doubles it). A thin line per subject
+    behind each; x capped at the last rung every subject reaches (n=n_sub)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     mins, npr = cur["minutes"], cur["n"]
-    rs, near, floor, sig = (cur["r_self_mean"], cur["near_mean"],
-                            cur["floor_mean"], cur["signal_mean"])
-    full = npr == n_sub                       # rungs every subject reaches
+    rs, near = cur["r_self_mean"], cur["near_mean"]
+    full = npr == n_sub                        # rungs every subject reaches (contiguous from 1)
     fi = np.where(full)[0]
-    tail = np.zeros(len(mins), bool)          # sparse tail, connected back to the last full rung
-    if len(fi):
-        tail[fi[-1]:] = True
-    seg = lambda y, mask: (np.where(mask, mins, np.nan), np.where(mask, y, np.nan))
-    fig, ax = plt.subplots(2, 1, figsize=(9, 8.5), sharex=True)
+    hi = float(mins[fi[-1]]) if len(fi) else float(mins[-1])
+    seg = lambda y: (np.where(full, mins, np.nan), np.where(full, y, np.nan))
 
-    # Top: r_self and the group floor (mean of others) with the gap shaded between them, plus
-    # the nearest impostor as a thin reference. A thin line per subject behind each bold mean;
-    # the n<n_sub tail is thin-grey so the 80-min single-subject point is not the headline.
+    fig, ax = plt.subplots(figsize=(9, 5.5))
     for sid in cur["subs"]:
-        ax[0].plot(mins, cur["per"]["r_self"][sid], color="C0", lw=0.5, alpha=0.20)
-        ax[0].plot(mins, cur["per"]["floor"][sid], color="C1", lw=0.5, alpha=0.20)
-    ax[0].fill_between(mins, floor, rs, where=full & np.isfinite(rs) & np.isfinite(floor),
-                       color="C2", alpha=0.15, label="gap = r_self − floor")
-    ax[0].plot(*seg(rs, tail), color="0.6", lw=1, ls="--")
-    ax[0].plot(*seg(floor, tail), color="0.6", lw=1, ls="--", label=f"n < {n_sub} (de-emphasised)")
-    ax[0].plot(*seg(rs, full), "o-", color="C0", lw=2, label="r_self (own other half)")
-    ax[0].plot(*seg(floor, full), "s-", color="C1", lw=2, label="group floor (mean of others)")
-    ax[0].plot(*seg(near, full), "-", color="C4", lw=1.2, alpha=0.8,
-               label="nearest impostor (max)")
-    ymin = np.nanmin([np.nanmin(floor[full]) if full.any() else 0.5, 0.5])
-    for i, m in enumerate(mins):
-        if npr[i] > 0:
-            ax[0].annotate(str(npr[i]), (m, ymin), fontsize=6, ha="center",
-                           color="0.5" if full[i] else "C3")
-    ax[0].set(ylabel="FC edge correlation (r)",
-              title=f"Reliability vs generic floor: r_self and floor (bold = n={n_sub})")
-    ax[0].legend(fontsize=8, loc="lower right")
-
-    # Bottom: the individual signal (r_self − nearest), thin line per subject behind the mean.
-    # Accuracy and SVM margin dropped -- this panel is the distinctiveness curve.
-    for sid in cur["subs"]:
-        ax[1].plot(mins, cur["per"]["signal"][sid], color="C2", lw=0.5, alpha=0.25)
-    ax[1].plot(*seg(sig, tail), color="0.6", lw=1, ls="--")
-    ax[1].plot(*seg(sig, full), "o-", color="C2", lw=2, label="signal = r_self − nearest")
-    ax[1].axhline(0, color="0.7", lw=0.8)
-    ax[1].set(xlabel="minutes of rest (linear)", ylabel="signal = r_self − nearest",
-              title="Individual signal (distinctiveness), per subject behind the mean")
-    ax[1].legend(fontsize=8, loc="lower right")
+        ax.plot(mins, cur["per"]["r_self"][sid], color="C0", lw=0.5, alpha=0.20)
+        ax.plot(mins, cur["per"]["near"][sid], color="C1", lw=0.5, alpha=0.20)
+    ax.fill_between(mins, near, rs, where=full & np.isfinite(rs) & np.isfinite(near),
+                    color="C2", alpha=0.18, label="signal = r_self − nearest")
+    ax.plot(*seg(rs), "o-", color="C0", lw=2, label="r_self (own other half)")
+    ax.plot(*seg(near), "s-", color="C1", lw=2, label="nearest other (competitor)")
+    ax.set(xlabel="minutes of rest (linear)", ylabel="FC edge correlation (r)",
+           title=f"Identification: r_self vs nearest impostor (n={n_sub}, to {hi:.0f} min)",
+           xlim=(0, hi))
+    ax.legend(fontsize=9, loc="lower right")
     fig.tight_layout()
     config.FC_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out = config.FC_RESULTS_DIR / "curves.png"
