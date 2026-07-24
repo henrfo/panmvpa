@@ -256,6 +256,18 @@ def _colmean(mat: np.ndarray) -> np.ndarray:
     return np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
 
 
+def _bootstrap_band(per: dict, subs, seed: int = 0, n_boot: int = 1000):
+    """95% band of the subject-mean curve, resampling SUBJECTS (not timepoints) with
+    replacement -- 1000 seeded draws, per-rung 2.5/97.5 percentiles. Returns (lo, hi)."""
+    rng = np.random.default_rng(seed)
+    mat = np.vstack([per[s] for s in subs])
+    n = mat.shape[0]
+    boots = np.vstack([_colmean(mat[rng.integers(0, n, n)]) for _ in range(n_boot)])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")          # all-NaN tail columns -> NaN percentile
+        return np.nanpercentile(boots, 2.5, axis=0), np.nanpercentile(boots, 97.5, axis=0)
+
+
 def identity_curves(sess: dict[str, dict[int, list[dict]]], gsr: bool) -> dict:
     """Nearest-neighbour identification, grown on the full minute ladder (no held-out
     examples, so unlike the SVM it runs to 80 min alongside the convergence curve).
@@ -581,7 +593,22 @@ def stage_analyze(subjects, run_svm: bool = False) -> None:
     _analysis_figure(cur, n_sub)
     _sampling_figure(cur, n_sub)          # x-axis check: first vs random X min
     if n_sub >= 2:
-        _residual_figure(cur, n_sub)      # the main analysis: reliability of the group residual
+        cur_off = identity_curves(sess, gsr=False)     # robustness overlay: global signal kept
+        _residual_figure(cur, n_sub, cur_off)          # the main analysis: group-residual reliability
+        # Headline numbers at the last full-cohort rung, with subject-bootstrap 95% CI.
+        fi_full = np.where(cur["n"] == n_sub)[0]
+        if len(fi_full):
+            ri, minute = fi_full[-1], float(cur["minutes"][fi_full[-1]])
+            hl = csv_dir / "headline.csv"
+            with open(hl, "w", newline="") as fh:
+                import csv as _csv
+                w = _csv.writer(fh)
+                w.writerow(["metric", "minutes", "mean", "ci_lo", "ci_hi"])
+                for key in ("r_self", "r_resid_reg"):
+                    lo, up = _bootstrap_band(cur["per"][key], cur["subs"])
+                    w.writerow([key, minute, f"{cur[key + '_mean'][ri]:.6f}",
+                                f"{lo[ri]:.6f}", f"{up[ri]:.6f}"])
+            print(f"csv -> {hl}")
 
     if n_sub >= 2:
         nb = network_breakdown(cur, mins)
@@ -611,43 +638,48 @@ def _analysis_figure(cur, n_sub) -> None:
     c_self, c_near = ps.SUNSET(0.30), ps.ACCENT   # darkest on the top (r_self) line
 
     fig, ax = ps.plt.subplots(figsize=(ps.HALF, 2.9))
-    for sid in cur["subs"]:
-        ax.plot(mins, cur["per"]["r_self"][sid], color=c_self, lw=0.4, alpha=0.15)
-        ax.plot(mins, cur["per"]["near"][sid], color=c_near, lw=0.4, alpha=0.15)
-    ax.fill_between(mins, near, rs, where=full & np.isfinite(rs) & np.isfinite(near),
-                    color=ps.ACCENT, alpha=0.12, lw=0, label="individual signal (own − nearest)")
+    for key, mean, color in (("r_self", rs, c_self), ("near", near, c_near)):
+        lo, up = _bootstrap_band(cur["per"][key], cur["subs"])   # 95% CI, subject bootstrap
+        ax.fill_between(mins, lo, up, where=full & np.isfinite(lo) & np.isfinite(up),
+                        color=color, alpha=0.20, lw=0)
     ax.plot(*seg(rs), "o-", color=c_self, lw=1.4, ms=3, label="vs own other half")
     ax.plot(*seg(near), "s-", color=c_near, lw=1.4, ms=3, label="nearest stranger")
     ax.set(xlabel="minutes of rest", ylabel="correlation between maps", xlim=(0, hi))
     ps.style_ax(ax)
     ps.legend(ax, loc="lower right")
     ps.titles(fig, "Own half vs the nearest stranger",
-              f"$N$ = {n_sub} people  |  1–{hi:.0f} min  |  global signal removed, 0.008–0.08 Hz")
+              f"$N$ = {n_sub} people  |  1–{hi:.0f} min  |  shaded: 95% CI (1000 bootstraps)")
     config.FC_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'curves')}")
 
 
-def _residual_figure(cur, n_sub) -> None:
+def _residual_figure(cur, n_sub, cur_off=None) -> None:
     """The main analysis: r_self (dominated by shared 'human cortex' structure) against r_resid,
-    the reliability of the deviation from the group (regression variant; subtraction is
-    numerically identical here). Thin line per subject behind each; x capped at n=n_sub."""
+    the reliability of the deviation from the group. 95% bootstrap CI shaded around each mean;
+    the same two curves WITHOUT global-signal regression drawn thin behind, as a robustness
+    overlay. x capped at n=n_sub."""
     ps.apply()
     mins, full, hi, seg = _fig_range(cur, n_sub)
-    cmean = lambda k: _colmean(np.vstack([cur["per"][k][s] for s in cur["subs"]]))
     c_self, c_res = ps.SUNSET(0.35), ps.ACCENT
+    keys = (("r_self", cur["r_self_mean"], c_self, "vs own other half"),
+            ("r_resid_reg", cur["r_resid_reg_mean"], c_res, "vs own other half (group pattern removed)"))
 
     fig, ax = ps.plt.subplots(figsize=(ps.HALF, 2.9))
-    for s in cur["subs"]:
-        ax.plot(mins, cur["per"]["r_self"][s], color=c_self, lw=0.4, alpha=0.15)
-        ax.plot(mins, cur["per"]["r_resid_reg"][s], color=c_res, lw=0.4, alpha=0.15)
-    ax.plot(*seg(cmean("r_self")), "o-", color=c_self, lw=1.4, ms=3, label="vs own other half")
-    ax.plot(*seg(cmean("r_resid_reg")), "o-", color=c_res, lw=1.4, ms=3,
-            label="vs own other half (group pattern removed)")
+    if cur_off is not None:                       # GSR off, thin behind (robustness overlay)
+        for key, _, color, _lab in keys:
+            ax.plot(*seg(cur_off[key + "_mean"]), "-", color=color, lw=0.8, alpha=0.55)
+        ax.plot([], [], "-", color="0.5", lw=0.8, label="global signal kept (GSR off)")
+    for key, mean, color, label in keys:
+        lo, up = _bootstrap_band(cur["per"][key], cur["subs"])
+        ax.fill_between(mins, lo, up, where=full & np.isfinite(lo) & np.isfinite(up),
+                        color=color, alpha=0.20, lw=0)
+        ax.plot(*seg(mean), "o-", color=color, lw=1.4, ms=3, label=label)
     ax.set(xlabel="minutes of rest", ylabel="correlation between maps", xlim=(0, hi))
     ps.style_ax(ax)
     ps.legend(ax, loc="lower right")
     ps.titles(fig, "Matching your own map, before and after removing the group",
-              f"$N$ = {n_sub} people  |  1–{hi:.0f} min  |  group = average of the other {n_sub - 1}")
+              f"$N$ = {n_sub} people  |  1–{hi:.0f} min  |  shaded: 95% CI  |  "
+              f"group = average of the other {n_sub - 1}")
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'residual')}")
 
 

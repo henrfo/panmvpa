@@ -149,11 +149,14 @@ survives changes to the metric it came from; a CSV doesn't). It prints the subje
   means; any summary (90% minutes, crossover, spreads) is computed from this in a notebook.
 - `networks.csv` — long format per network block: `network_a, network_b, minutes, r_self,
   nearest, signal, r_resid_sub, r_resid_reg` (subject-mean per Yeo-17 pair, every rung).
-- `residual.png` — **the main figure**: r_self against both residual variants on one axis, thin
-  line per subject behind, x capped at n=10.
-- `curves.png` — one panel: r_self and the nearest impostor, the individual signal shaded
-  between them (the shaded gap *is* the signal, so it isn't plotted twice), a thin line per
-  subject behind each, x capped at the last rung every subject reaches (n=10, 45 min).
+- `headline.csv` — the two headline numbers at the last full-cohort rung (45 min):
+  `metric, minutes, mean, ci_lo, ci_hi` for `r_self` and `r_resid_reg`, with a subject-level
+  bootstrap 95% CI (1000 seeded draws, subjects resampled with replacement — not timepoints).
+- `residual.png` — **the main figure**: r_self vs the group residual, each mean with a shaded
+  **95% bootstrap CI**, and the same two curves **without global-signal regression** drawn thin
+  behind as a robustness overlay. x capped at n=10.
+- `curves.png` — one panel: r_self and the nearest impostor, each mean with a shaded 95%
+  bootstrap CI; the gap between them is the individual signal. x capped at n=10 (45 min).
 - `sampling.png` / `sampling.csv` — three ways of drawing the X minutes (r_self; seeded):
   **first** (the opening X min — what you can actually collect), **scatter** (X individual
   timepoints across the half), **block** (X min as ~1-min contiguous chunks from random
