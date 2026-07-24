@@ -115,11 +115,12 @@ The n<10 tail (at 80 min, a single subject with the most rest) is **de-emphasise
 figure — bold only over the full-cohort rungs, the sparse tail greyed — so the highest point
 on the chart isn't one person.
 
-- **SVM (second method)** — one example = *X* minutes labelled by subject; grow *X*, retrain,
-  record the **margin**. Held out by **whole session**, never random minutes; examples
+- **SVM (second method, `--svm`)** — one example = *X* minutes labelled by subject; grow *X*,
+  retrain, record the **margin**. Held out by **whole session**, never random minutes; examples
   session-disjoint. An example eats *X* minutes, so it stops past ~40 min when each subject has
   one example to hold out. A **connectivity-free control** (per-parcel temporal mean/SD) is
-  scored alongside it.
+  scored alongside it. It is the only slow part (20+ min), so it is **off by default** — pass
+  `--svm` to run it; the curves, CSVs and network breakdown finish in seconds without it.
 
 **`analyze` prints numbers and writes files — no prose conclusions** (a conclusion in prose
 survives changes to the metric it came from; a CSV doesn't). It prints the subject-mean table
@@ -140,7 +141,8 @@ survives changes to the metric it came from; a CSV doesn't). It prints the subje
 ```bash
 python scripts/run_fc.py inspect --subjects PAN01           # reduce ONE run, look, delete nothing
 python scripts/run_fc.py reduce  --subjects PAN01 --cleanup # reduce all rest, then drop the BOLD
-python scripts/run_fc.py analyze                            # print tables, write CSVs + figures
+python scripts/run_fc.py analyze                            # tables + CSVs + figures (seconds)
+python scripts/run_fc.py analyze --svm                      # also the leave-one-session-out SVM (20+ min)
 ```
 
 `inspect` first: deletion is the only irreversible step, and `--cleanup` skips any run whose

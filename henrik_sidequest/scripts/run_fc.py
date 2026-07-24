@@ -481,7 +481,7 @@ def identify_table(sess, gsr: bool) -> list[dict]:
     return rows
 
 
-def stage_analyze(subjects) -> None:
+def stage_analyze(subjects, run_svm: bool = False) -> None:
     sess = _sessions()
     if not sess:
         raise SystemExit(f"no reduced files in {config.REDUCED_DIR} — run `reduce` first.")
@@ -513,24 +513,26 @@ def stage_analyze(subjects) -> None:
         else:
             print(f"  {m:4.1f}  {npr[i]:2d}   {rs[i]:.3f}     --       --       --      --{tail}")
 
-    table = identify_table(sess, gsr=True)
-    print(f"\nSVM leave-one-session-out (chance={1.0/n_sub:.2f}):")
-    print("  min  examples  used   FC acc / margin    structural acc / margin")
-    for r in table:
-        used = f"{r['used_frac']:.0%}"
-        if "acc_fc" in r:
-            print(f"  {r['min']:4.1f}  {r['n']:3d} (min {r['per_sub']}/subj)  {used:>4}  "
-                  f"{r['acc_fc']:.2f} / {r['margin_fc']:+.2f}     "
-                  f"{r['acc_st']:.2f} / {r['margin_st']:+.2f}")
-        else:
-            print(f"  {r['min']:4.1f}  {r['n']:3d}          {used:>4}  ({r['per_sub']} example/subj)")
+    # The SVM is the only slow part (20+ min); off by default, run only with --svm.
+    if run_svm:
+        table = identify_table(sess, gsr=True)
+        print(f"\nSVM leave-one-session-out (chance={1.0/n_sub:.2f}):")
+        print("  min  examples  used   FC acc / margin    structural acc / margin")
+        for r in table:
+            used = f"{r['used_frac']:.0%}"
+            if "acc_fc" in r:
+                print(f"  {r['min']:4.1f}  {r['n']:3d} (min {r['per_sub']}/subj)  {used:>4}  "
+                      f"{r['acc_fc']:.2f} / {r['margin_fc']:+.2f}     "
+                      f"{r['acc_st']:.2f} / {r['margin_st']:+.2f}")
+            else:
+                print(f"  {r['min']:4.1f}  {r['n']:3d}          {used:>4}  ({r['per_sub']} example/subj)")
 
     # Write data, not conclusions: long-format CSVs + figures to interpret in a notebook.
     config.FC_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     curves_csv = config.FC_RESULTS_DIR / "curves.csv"
     _write_curves_csv(cur, n_sub, curves_csv)
     print(f"\ncsv -> {curves_csv}")
-    _analysis_figure(cur, table, n_sub)
+    _analysis_figure(cur, n_sub)
 
     if n_sub >= 2:
         nb = network_breakdown(cur, mins)
@@ -541,7 +543,7 @@ def stage_analyze(subjects) -> None:
             _network_figure(cur, nb, hi_full)
 
 
-def _analysis_figure(cur, table, n_sub) -> None:
+def _analysis_figure(cur, n_sub) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -651,9 +653,11 @@ def main() -> None:
     ap.add_argument("--subjects", nargs="+", default=config.SUBJECTS)
     ap.add_argument("--cleanup", action="store_true",
                     help="reduce only: delete each run's BOLD after a passing reduction")
+    ap.add_argument("--svm", action="store_true",
+                    help="analyze only: also run the leave-one-session-out SVM (20+ min; off by default)")
     args = ap.parse_args()
     if args.stage == "analyze":
-        stage_analyze(args.subjects)
+        stage_analyze(args.subjects, run_svm=args.svm)
     else:
         if args.cleanup:
             print("cleanup: ON — BOLD deleted after each passing reduction\n")
