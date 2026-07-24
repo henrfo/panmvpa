@@ -169,8 +169,9 @@ survives changes to the metric it came from; a CSV doesn't). It prints the subje
 - `nettraj.png` — group-residual reliability per Yeo-17 network vs data, association systems
   coloured and the sensory ones greyed, only the extreme few labelled.
 
-Every figure is written as **both PDF** (paper) **and PNG** (viewing) and follows one shared
-style — serif, the `sunset` palette, no default colormaps — defined once in
+Outputs are sorted by type under `results/fc/<version>/`: **`csv/`**, **`pdf/`** (paper), and
+**`png/`** (viewing). Every figure is written as both PDF and PNG and follows one shared style —
+serif, the `sunset` palette, no default colormaps — defined once in
 [panmvpa/plotstyle.py](panmvpa/plotstyle.py) per [docs/plot_style.md](docs/plot_style.md), not
 per-figure.
 

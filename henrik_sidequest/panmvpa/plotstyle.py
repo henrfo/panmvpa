@@ -14,6 +14,8 @@ here and every plot follows.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt                       # noqa: E402
@@ -120,9 +122,14 @@ def colorbar(fig, im, ax, label: str | None = None):
 
 
 def save(fig, stem) -> str:
-    """Write <stem>.pdf (paper) and <stem>.png (viewing). Returns the .png path."""
-    stem = str(stem)
+    """Write <dir>/pdf/<name>.pdf (paper) and <dir>/png/<name>.png (viewing) from a stem like
+    <dir>/<name>. Each format lands in its own sibling folder. Returns the .png path."""
+    stem = Path(stem)
+    out = {}
     for ext in ("pdf", "png"):
-        fig.savefig(f"{stem}.{ext}", **SAVE_KW)
+        d = stem.parent / ext
+        d.mkdir(parents=True, exist_ok=True)
+        out[ext] = d / f"{stem.name}.{ext}"
+        fig.savefig(out[ext], **SAVE_KW)
     plt.close(fig)
-    return f"{stem}.png"
+    return str(out["png"])

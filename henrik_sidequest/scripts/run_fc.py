@@ -573,8 +573,9 @@ def stage_analyze(subjects, run_svm: bool = False) -> None:
                 print(f"  {r['min']:4.1f}  {r['n']:3d}          {used:>4}  ({r['per_sub']} example/subj)")
 
     # Write data, not conclusions: long-format CSVs + figures to interpret in a notebook.
-    config.FC_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    curves_csv = config.FC_RESULTS_DIR / "curves.csv"
+    csv_dir = config.FC_RESULTS_DIR / "csv"
+    csv_dir.mkdir(parents=True, exist_ok=True)
+    curves_csv = csv_dir / "curves.csv"
     _write_curves_csv(cur, n_sub, curves_csv)
     print(f"\ncsv -> {curves_csv}")
     _analysis_figure(cur, n_sub)
@@ -584,7 +585,7 @@ def stage_analyze(subjects, run_svm: bool = False) -> None:
 
     if n_sub >= 2:
         nb = network_breakdown(cur, mins)
-        net_csv = config.FC_RESULTS_DIR / "networks.csv"
+        net_csv = csv_dir / "networks.csv"
         _write_network_csv(nb["rows"], net_csv)
         print(f"csv -> {net_csv}")
         if len(fi):
@@ -747,7 +748,8 @@ def _sampling_figure(cur, n_sub) -> None:
     import csv
     npr = cur["n"]
     cell = lambda x: f"{x:.6f}" if np.isfinite(x) else ""
-    path = config.FC_RESULTS_DIR / "sampling.csv"
+    path = config.FC_RESULTS_DIR / "csv" / "sampling.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["subject", "minutes", "sample", "n", "r_self", "nearest", "signal"])
