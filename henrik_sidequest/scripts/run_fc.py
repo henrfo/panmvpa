@@ -776,7 +776,7 @@ def _network_figure(cur, nb, target_min) -> None:
 
     fig, ax = ps.plt.subplots(1, 2, figsize=(ps.FULL, 3.4))
     vmax = float(np.nanmax(np.abs(Ms)))
-    im0 = ax[0].imshow(Ms, cmap=ps.SUNSET, vmin=-vmax, vmax=vmax)
+    im0 = ax[0].imshow(Ms, cmap=ps.SUNSET_DIV, vmin=-vmax, vmax=vmax)   # signed FC -> diverging
     for b in bounds[:-1]:
         ax[0].axhline(b - 0.5, color="#888888", lw=0.3); ax[0].axvline(b - 0.5, color="#888888", lw=0.3)
     for a in ax:

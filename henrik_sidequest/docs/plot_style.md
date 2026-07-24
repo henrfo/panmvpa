@@ -56,7 +56,11 @@ LinearSegmentedColormap.from_list("sunset", [
 ])
 ```
 
-- **Heatmaps:** Use `SUNSET` directly with `imshow(cmap=SUNSET)`.
+- **Heatmaps (unsigned data):** Use `SUNSET` directly with `imshow(cmap=SUNSET)`.
+- **Heatmaps (signed data, e.g. correlation matrices with anticorrelation):** Use `SUNSET_DIV`,
+  the diverging complement — cool one side, white at zero, warm sunset the other — with
+  symmetric limits (`vmin=-vmax, vmax=vmax`) so white lands on 0. Keeps the sign readable while
+  staying in the palette.
 - **Line plots / discrete series:** Sample from `SUNSET` avoiding near-black and near-white extremes:
   ```python
   colors = [SUNSET(0.82 - 0.65 * i / (n - 1)) for i in range(n)]   # plotstyle.sunset_colors(n)
