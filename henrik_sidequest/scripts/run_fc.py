@@ -32,6 +32,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from panmvpa import config, rest  # noqa: E402
+from panmvpa import plotstyle as ps  # noqa: E402
 
 TR = config.TR
 BANDPASS = dict(low_pass=0.08, high_pass=0.009, t_r=TR)
@@ -158,28 +159,26 @@ def _drop(path: Path) -> float:
 
 
 def _diagnostic_figure(rec, sid, ses, run) -> Path:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    ps.apply()
     t = np.arange(rec["parcels"].shape[0]) * TR / 60.0
-    fig, ax = plt.subplots(1, 3, figsize=(14, 3.4))
-    ax[0].plot(t, rec["gs"], lw=0.8); ax[0].set_title("whole-brain mean (wanders slowly)")
-    ax[1].plot(t, rec["dvars"], lw=0.8); ax[1].set_title("DVARS (flat + spikes)")
+    fig, ax = ps.plt.subplots(1, 3, figsize=(ps.FULL, 2.4))
+    ax[0].plot(t, rec["gs"], lw=0.9, color=ps.ACCENT)
+    ax[1].plot(t, rec["dvars"], lw=0.9, color=ps.ACCENT)
     p = rec["parcels"].T
     p = p - p.mean(axis=1, keepdims=True)   # demean each parcel so fluctuations show
-    ax[2].imshow(p, aspect="auto", cmap="coolwarm",
+    ax[2].imshow(p, aspect="auto", cmap=ps.SUNSET,
                  vmin=np.percentile(p, 2), vmax=np.percentile(p, 98),
                  extent=[0, t[-1], 400, 0])
-    ax[2].set_title("400 parcels, demeaned (no dead rows)")
+    for j, name in enumerate(("whole-brain mean", "DVARS", "400 parcels, demeaned")):
+        ps.panel(ax[j], j, name)
     for a in ax[:2]:
-        a.set_xlabel("minutes")
-    fig.suptitle(f"{sid} ses-{ses} run-{run} — reduction sanity")
-    fig.tight_layout()
+        a.set_xlabel("minutes"); ps.style_ax(a)
+    ax[2].tick_params(length=0)
+    ps.titles(fig, f"{sid} ses-{ses} run-{run} — reduction sanity", top=0.80)
     config.FC_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out = config.FC_RESULTS_DIR / f"inspect_{sid}_ses-{ses:02d}_run-{run:02d}.png"
-    fig.savefig(out, dpi=110); plt.close(fig)
+    out = ps.save(fig, config.FC_RESULTS_DIR / f"inspect_{sid}_ses-{ses:02d}_run-{run:02d}")
     print(f"  figure -> {out}")
-    return out
+    return Path(out)
 
 
 # ---------------------------------------------------------------- analysis (tiny files)
@@ -590,70 +589,65 @@ def stage_analyze(subjects, run_svm: bool = False) -> None:
         print(f"csv -> {net_csv}")
         if len(fi):
             _network_figure(cur, nb, hi_full)
+            _nettraj_figure(cur, nb, n_sub)
 
 
-def _analysis_figure(cur, n_sub) -> None:
-    """One panel: r_self and the nearest impostor, the individual signal shaded between them
-    (plotting the gap and the signal separately just doubles it). A thin line per subject
-    behind each; x capped at the last rung every subject reaches (n=n_sub)."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+def _fig_range(cur, n_sub):
+    """(mins, full-mask, hi, seg) -- the full-cohort range and a segment helper the figures share."""
     mins, npr = cur["minutes"], cur["n"]
-    rs, near = cur["r_self_mean"], cur["near_mean"]
     full = npr == n_sub                        # rungs every subject reaches (contiguous from 1)
     fi = np.where(full)[0]
     hi = float(mins[fi[-1]]) if len(fi) else float(mins[-1])
     seg = lambda y: (np.where(full, mins, np.nan), np.where(full, y, np.nan))
+    return mins, full, hi, seg
 
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+
+def _analysis_figure(cur, n_sub) -> None:
+    """One panel: r_self and the nearest impostor, the individual signal shaded between them."""
+    ps.apply()
+    mins, full, hi, seg = _fig_range(cur, n_sub)
+    rs, near = cur["r_self_mean"], cur["near_mean"]
+    c_self, c_near = ps.ACCENT, ps.SUNSET(0.35)
+
+    fig, ax = ps.plt.subplots(figsize=(ps.HALF, 2.9))
     for sid in cur["subs"]:
-        ax.plot(mins, cur["per"]["r_self"][sid], color="C0", lw=0.5, alpha=0.20)
-        ax.plot(mins, cur["per"]["near"][sid], color="C1", lw=0.5, alpha=0.20)
+        ax.plot(mins, cur["per"]["r_self"][sid], color=c_self, lw=0.4, alpha=0.15)
+        ax.plot(mins, cur["per"]["near"][sid], color=c_near, lw=0.4, alpha=0.15)
     ax.fill_between(mins, near, rs, where=full & np.isfinite(rs) & np.isfinite(near),
-                    color="C2", alpha=0.18, label="signal = r_self − nearest")
-    ax.plot(*seg(rs), "o-", color="C0", lw=2, label="r_self (own other half)")
-    ax.plot(*seg(near), "s-", color="C1", lw=2, label="nearest other (competitor)")
-    ax.set(xlabel="minutes of rest (linear)", ylabel="FC edge correlation (r)",
-           title=f"Identification: r_self vs nearest impostor (n={n_sub}, to {hi:.0f} min)",
-           xlim=(0, hi))
-    ax.legend(fontsize=9, loc="lower right")
-    fig.tight_layout()
+                    color=ps.ACCENT, alpha=0.12, lw=0, label=r"signal $= r_\mathrm{self} - $nearest")
+    ax.plot(*seg(rs), "o-", color=c_self, lw=1.4, ms=3, label=r"$r_\mathrm{self}$ (own other half)")
+    ax.plot(*seg(near), "s-", color=c_near, lw=1.4, ms=3, label="nearest stranger")
+    ax.set(xlabel="minutes of rest", ylabel="FC edge correlation ($r$)", xlim=(0, hi))
+    ps.style_ax(ax)
+    ps.legend(ax, loc="lower right")
+    ps.titles(fig, "Own half vs the nearest stranger",
+              f"$N$ = {n_sub} subjects  |  1–{hi:.0f} min  |  GSR + 0.008–0.08 Hz")
     config.FC_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out = config.FC_RESULTS_DIR / "curves.png"
-    fig.savefig(out, dpi=120); plt.close(fig)
-    print(f"figure -> {out}")
+    print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'curves')}")
 
 
 def _residual_figure(cur, n_sub) -> None:
     """The main analysis: r_self (dominated by shared 'human cortex' structure) against r_resid,
-    the reliability of the deviation from the group. Both residual variants (subtract g, regress
-    g out); a thin line per subject behind r_self and the regression residual; x capped at n=n_sub."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    mins, npr = cur["minutes"], cur["n"]
-    full = npr == n_sub
-    fi = np.where(full)[0]
-    hi = float(mins[fi[-1]]) if len(fi) else float(mins[-1])
-    seg = lambda y: (np.where(full, mins, np.nan), np.where(full, y, np.nan))
+    the reliability of the deviation from the group (regression variant; subtraction is
+    numerically identical here). Thin line per subject behind each; x capped at n=n_sub."""
+    ps.apply()
+    mins, full, hi, seg = _fig_range(cur, n_sub)
     cmean = lambda k: _colmean(np.vstack([cur["per"][k][s] for s in cur["subs"]]))
+    c_self, c_res = ps.SUNSET(0.35), ps.ACCENT
 
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    fig, ax = ps.plt.subplots(figsize=(ps.HALF, 2.9))
     for s in cur["subs"]:
-        ax.plot(mins, cur["per"]["r_self"][s], color="C0", lw=0.5, alpha=0.18)
-        ax.plot(mins, cur["per"]["r_resid_reg"][s], color="C3", lw=0.5, alpha=0.18)
-    ax.plot(*seg(cmean("r_self")), "o-", color="C0", lw=2, label="r_self (raw)")
-    ax.plot(*seg(cmean("r_resid_reg")), "o-", color="C3", lw=2, label="r_resid (regress g out)")
-    ax.plot(*seg(cmean("r_resid_sub")), "s--", color="C1", lw=1.5, label="r_resid (subtract g)")
-    ax.axhline(0, color="0.7", lw=0.8)
-    ax.set(xlabel="minutes of rest (linear)", ylabel="FC edge correlation (r)",
-           title=f"Group-residual reliability vs r_self (n={n_sub}, to {hi:.0f} min)", xlim=(0, hi))
-    ax.legend(fontsize=8, loc="right")
-    fig.tight_layout()
-    out = config.FC_RESULTS_DIR / "residual.png"
-    fig.savefig(out, dpi=120); plt.close(fig)
-    print(f"figure -> {out}")
+        ax.plot(mins, cur["per"]["r_self"][s], color=c_self, lw=0.4, alpha=0.15)
+        ax.plot(mins, cur["per"]["r_resid_reg"][s], color=c_res, lw=0.4, alpha=0.15)
+    ax.plot(*seg(cmean("r_self")), "o-", color=c_self, lw=1.4, ms=3, label=r"$r_\mathrm{self}$ (raw)")
+    ax.plot(*seg(cmean("r_resid_reg")), "o-", color=c_res, lw=1.4, ms=3,
+            label=r"$r_\mathrm{resid}$ (group removed)")
+    ax.set(xlabel="minutes of rest", ylabel="FC edge correlation ($r$)", xlim=(0, hi))
+    ps.style_ax(ax)
+    ps.legend(ax, loc="lower right")
+    ps.titles(fig, "Reliability of the group deviation",
+              f"$N$ = {n_sub} subjects  |  1–{hi:.0f} min  |  leave-one-out group residual")
+    print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'residual')}")
 
 
 def _draw_scatter(T: int, n: int, rng) -> np.ndarray:
@@ -711,36 +705,34 @@ def _sampling_figure(cur, n_sub) -> None:
                    autocorrelation preserved)
     scatter vs block separates effective-DOF from session diversity: if the scatter gap collapses
     onto block it was DOF; if block still sits well above first, it's sessions."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    ps.apply()
     modes = {"first": cur["per"],
              "scatter": _resampled_curves(cur, _draw_scatter),
              "block": _resampled_curves(cur, _draw_block)}
-    mins, npr = cur["minutes"], cur["n"]
-    full = npr == n_sub
-    fi = np.where(full)[0]
-    hi = float(mins[fi[-1]]) if len(fi) else float(mins[-1])
-    seg = lambda y: (np.where(full, mins, np.nan), np.where(full, y, np.nan))
+    mins, full, hi, seg = _fig_range(cur, n_sub)
     cmean = lambda per, k: _colmean(np.vstack([per[k][s] for s in cur["subs"]]))
-    style = {"first": ("C0", "o-"), "scatter": ("C1", "^--"), "block": ("C2", "s-.")}
+    style = {"first": (ps.SUNSET(0.30), "o-"), "scatter": (ps.SUNSET(0.55), "^--"),
+             "block": (ps.ACCENT, "s-.")}
     label = {"first": "first X min", "scatter": "random scattered TRs",
              "block": "random 1-min blocks"}
 
-    fig, ax = plt.subplots(figsize=(9, 5.5))
-    for name, per in modes.items():
-        c, ls = style[name]
-        ax.plot(*seg(cmean(per, "r_self")), ls, color=c, lw=2, ms=4, label=f"r_self ({label[name]})")
-    ax.set(xlabel="minutes of rest (linear)", ylabel="r_self (FC edge correlation)",
-           title=f"first vs random-scatter vs random-block (n={n_sub}, to {hi:.0f} min)",
-           xlim=(0, hi))
-    ax.legend(fontsize=8, loc="lower right")
-    fig.tight_layout()
-    out = config.FC_RESULTS_DIR / "sampling.png"
-    fig.savefig(out, dpi=120); plt.close(fig)
-    print(f"figure -> {out}")
+    fig, axes = ps.plt.subplots(1, 2, figsize=(ps.FULL, 2.9), sharex=True)
+    for j, metric in enumerate(("r_self", "signal")):
+        ax = axes[j]
+        for name, per in modes.items():
+            c, ls = style[name]
+            ax.plot(*seg(cmean(per, metric)), ls, color=c, lw=1.4, ms=3, label=label[name])
+        ax.set(xlabel="minutes of rest", xlim=(0, hi))
+        ps.style_ax(ax)
+        ps.panel(ax, j, r"$r_\mathrm{self}$" if metric == "r_self" else "signal")
+    axes[0].set_ylabel("FC edge correlation ($r$)")
+    ps.legend(axes[0], loc="lower right")
+    ps.titles(fig, "First vs scattered vs block sampling of the growing X minutes",
+              f"$N$ = {n_sub}  |  1–{hi:.0f} min  |  seed 0  |  block = 1-min chunks", top=0.82)
+    print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'sampling')}")
 
     import csv
+    npr = cur["n"]
     cell = lambda x: f"{x:.6f}" if np.isfinite(x) else ""
     path = config.FC_RESULTS_DIR / "sampling.csv"
     with open(path, "w", newline="") as fh:
@@ -758,10 +750,8 @@ def _sampling_figure(cur, n_sub) -> None:
 
 def _network_figure(cur, nb, target_min) -> None:
     """Two panels: the mean reference FC with parcels sorted by Yeo-17 network (blocks line up
-    with named systems), and the 17x17 individual-signal-per-block matrix at `target_min`."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    with named systems), and the 17x17 group-residual-per-block matrix at `target_min`."""
+    ps.apply()
     nets, names, K = nb["nets"], nb["names"], len(nb["names"])
     order = np.argsort(nets, kind="stable")           # parcels grouped by network
     sorted_nets = nets[order]
@@ -782,26 +772,66 @@ def _network_figure(cur, nb, target_min) -> None:
     for r in nb["rows"]:
         if r["minutes"] == target_min:
             p, q = idx[r["a"]], idx[r["b"]]
-            S[p, q] = S[q, p] = r["signal"]
+            S[p, q] = S[q, p] = r["r_resid_reg"]
 
-    fig, ax = plt.subplots(1, 2, figsize=(15, 7))
-    im0 = ax[0].imshow(Ms, cmap="RdBu_r", vmin=-0.5, vmax=0.5)
+    fig, ax = ps.plt.subplots(1, 2, figsize=(ps.FULL, 3.4))
+    vmax = float(np.nanmax(np.abs(Ms)))
+    im0 = ax[0].imshow(Ms, cmap=ps.SUNSET, vmin=-vmax, vmax=vmax)
     for b in bounds[:-1]:
-        ax[0].axhline(b - 0.5, color="k", lw=0.4); ax[0].axvline(b - 0.5, color="k", lw=0.4)
-    ax[0].set_xticks(centers); ax[0].set_xticklabels(names, rotation=90, fontsize=7)
-    ax[0].set_yticks(centers); ax[0].set_yticklabels(names, fontsize=7)
-    ax[0].set_title("Mean reference FC, 400 parcels sorted by Yeo-17 network")
-    fig.colorbar(im0, ax=ax[0], fraction=0.046)
+        ax[0].axhline(b - 0.5, color="#888888", lw=0.3); ax[0].axvline(b - 0.5, color="#888888", lw=0.3)
+    for a in ax:
+        a.tick_params(length=0)
+    ax[0].set_xticks(centers); ax[0].set_xticklabels(names, rotation=90, fontsize=ps.FS["tick"] - 1)
+    ax[0].set_yticks(centers); ax[0].set_yticklabels(names, fontsize=ps.FS["tick"] - 1)
+    ps.panel(ax[0], 0, "mean reference FC, parcels sorted by network")
+    ps.colorbar(fig, im0, ax[0])
 
-    im1 = ax[1].imshow(S, cmap="viridis")
-    ax[1].set_xticks(range(K)); ax[1].set_xticklabels(names, rotation=90, fontsize=7)
-    ax[1].set_yticks(range(K)); ax[1].set_yticklabels(names, fontsize=7)
-    ax[1].set_title(f"signal per network block @ {target_min:.0f} min")
-    fig.colorbar(im1, ax=ax[1], fraction=0.046)
-    fig.tight_layout()
-    out = config.FC_RESULTS_DIR / "networks.png"
-    fig.savefig(out, dpi=120); plt.close(fig)
-    print(f"figure -> {out}")
+    im1 = ax[1].imshow(S, cmap=ps.SUNSET)
+    ax[1].set_xticks(range(K)); ax[1].set_xticklabels(names, rotation=90, fontsize=ps.FS["tick"] - 1)
+    ax[1].set_yticks(range(K)); ax[1].set_yticklabels(names, fontsize=ps.FS["tick"] - 1)
+    ps.panel(ax[1], 1, rf"$r_\mathrm{{resid}}$ per block @ {target_min:.0f} min")
+    ps.colorbar(fig, im1, ax[1])
+    ps.titles(fig, "Reference FC by system, and group-residual reliability per block",
+              f"$N$ = {len(cur['subs'])}  |  Yeo-17  |  residual @ {target_min:.0f} min", top=0.80)
+    print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'networks')}")
+
+
+def _nettraj_figure(cur, nb, n_sub) -> None:
+    """Per-network group-residual reliability vs data: association systems coloured, the rest
+    grey, only the extreme few labelled (17 labelled lines would be unreadable)."""
+    ps.apply()
+    _, _, hi, _ = _fig_range(cur, n_sub)
+    names, assoc = nb["names"], set(config.ASSOCIATION)
+    ms = sorted({r["minutes"] for r in nb["rows"] if r["minutes"] <= hi})
+    acc = {nm: {m: [] for m in ms} for nm in names}
+    for r in nb["rows"]:
+        if r["minutes"] > hi or not np.isfinite(r["r_resid_reg"]):
+            continue
+        for nm in ({r["a"], r["b"]}):          # every block counts toward both its systems
+            acc[nm][r["minutes"]].append(r["r_resid_reg"])
+    traj = {nm: np.array([np.mean(acc[nm][m]) if acc[nm][m] else np.nan for m in ms]) for nm in names}
+    final = {nm: (traj[nm][-1] if len(ms) else np.nan) for nm in names}
+    ranked = sorted((nm for nm in names if np.isfinite(final[nm])), key=lambda nm: final[nm])
+    to_label = set(ranked[:2] + ranked[-3:])   # bottom 2 + top 3
+    assoc_names = [nm for nm in names if nm in assoc]
+    col = dict(zip(assoc_names, ps.sunset_colors(len(assoc_names))))
+
+    fig, ax = ps.plt.subplots(figsize=(ps.HALF, 3.0))
+    for nm in names:                            # sensorimotor / other: grey background
+        if nm not in assoc:
+            ax.plot(ms, traj[nm], color=ps.GREY, lw=0.8, alpha=0.55)
+    for nm in assoc_names:                       # association: warm palette
+        ax.plot(ms, traj[nm], color=col[nm], lw=1.3)
+    for nm in to_label:
+        if np.isfinite(final[nm]):
+            ax.annotate(nm, (ms[-1], final[nm]), xytext=(3, 0), textcoords="offset points",
+                        fontsize=ps.FS["annot"], color=col.get(nm, ps.GREY), va="center")
+    ax.set(xlabel="minutes of rest", ylabel=r"$r_\mathrm{resid}$ (per network)",
+           xlim=(0, hi * 1.25))
+    ps.style_ax(ax)
+    ps.titles(fig, "Residual reliability per network",
+              f"$N$ = {n_sub}  |  association coloured, sensory grey  |  to {hi:.0f} min")
+    print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'nettraj')}")
 
 
 # ---------------------------------------------------------------- entry

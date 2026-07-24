@@ -164,8 +164,15 @@ survives changes to the metric it came from; a CSV doesn't). It prints the subje
   session question; first vs scatter mixes sessions with DOF and shouldn't be read alone.) A
   separate question from the residual analysis above.
 - `networks.png` — the mean reference FC with the 400 parcels **sorted by Yeo-17 network**
-  (blocks line up with named systems) beside the 17×17 signal-per-block matrix at the last
-  full-cohort rung.
+  (blocks line up with named systems) beside the 17×17 group-residual-per-block matrix at the
+  last full-cohort rung.
+- `nettraj.png` — group-residual reliability per Yeo-17 network vs data, association systems
+  coloured and the sensory ones greyed, only the extreme few labelled.
+
+Every figure is written as **both PDF** (paper) **and PNG** (viewing) and follows one shared
+style — serif, the `sunset` palette, no default colormaps — defined once in
+[panmvpa/plotstyle.py](panmvpa/plotstyle.py) per [docs/plot_style.md](docs/plot_style.md), not
+per-figure.
 
 ```bash
 python scripts/run_fc.py inspect --subjects PAN01           # reduce ONE run, look, delete nothing
