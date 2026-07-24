@@ -826,17 +826,17 @@ def _network_figure(cur, nb, target_min) -> None:
         ax[0].axhline(b - 0.5, color="#888888", lw=0.3); ax[0].axvline(b - 0.5, color="#888888", lw=0.3)
     ax[0].set_xticks(centers); ax[0].set_xticklabels(full_names, rotation=90, fontsize=ps.FS["tick"])
     ax[0].set_yticks(centers); ax[0].set_yticklabels(full_names, fontsize=ps.FS["tick"])
-    ps.panel(ax[0], 0, "average connectivity (parcels sorted by network)")
+    ps.panel(ax[0], 0, "connectivity averaged across people (parcels sorted by network)")
     ps.colorbar(fig, im0, ax[0])
 
     im1 = ax[1].imshow(S, cmap=ps.SUNSET_HI)   # dark = more
     ax[1].set_xticks(range(K)); ax[1].set_xticklabels(full_names, rotation=90, fontsize=ps.FS["tick"])
     ax[1].set_yticks(range(K)); ax[1].set_yticklabels(full_names, fontsize=ps.FS["tick"])
-    ps.panel(ax[1], 1, "match to own network (group removed)")
+    ps.panel(ax[1], 1, "match to own map (group removed)")
     ps.colorbar(fig, im1, ax[1])
     for a in ax:
         a.tick_params(length=0)
-    ps.titles(fig, "Connectivity by network, and where individuality survives",
+    ps.titles(fig, "Connectivity by network, and reliability of the individual pattern",
               f"$N$ = {len(cur['subs'])} people  |  Yeo-17 networks  |  at {target_min:.0f} min",
               top=0.82)
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'networks')}")
