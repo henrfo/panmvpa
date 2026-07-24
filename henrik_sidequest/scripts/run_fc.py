@@ -931,14 +931,16 @@ def _emerge_figure(cur, n_sub) -> None:
     vb = float(np.nanpercentile(np.abs(resid[-1]), 98))
     cmap = ps.SUNSET_DIV.with_extremes(bad="white")
 
+    # Dedicated colorbar cell per row (a narrow last column) so nothing overlaps the panels.
     C = len(cols)
-    fig, axes = ps.plt.subplots(2, C, figsize=(ps.FULL, 4.2))
-    axes = np.atleast_2d(axes)
+    fig = ps.plt.figure(figsize=(ps.FULL, 4.2))
+    gs = fig.add_gridspec(2, C + 1, width_ratios=[1] * C + [0.06],
+                          left=0.07, right=0.93, top=0.82, bottom=0.05, wspace=0.1, hspace=0.16)
     for i, (rlab, mats, vmax) in enumerate((("whole map", whole, vt),
                                             ("individual part", resid, vb))):
         im = None
         for j, M in enumerate(mats):
-            ax = axes[i, j]
+            ax = fig.add_subplot(gs[i, j])
             im = ax.imshow(M, cmap=cmap, vmin=-vmax, vmax=vmax)
             for b in bounds[:-1]:
                 ax.axhline(b - 0.5, color="#666666", lw=0.25)
@@ -946,12 +948,15 @@ def _emerge_figure(cur, n_sub) -> None:
             ax.set_xticks([]); ax.set_yticks([])
             if i == 0:
                 ax.set_title(f"{cols[j]:g} min", fontsize=ps.FS["label"], color=ps.PANEL, pad=4)
-        axes[i, 0].set_ylabel(rlab, fontsize=ps.FS["label"])
-        cb = fig.colorbar(im, ax=axes[i].tolist(), fraction=0.018, pad=0.015, aspect=18)
+            if j == 0:
+                ax.set_ylabel(rlab, fontsize=ps.FS["label"])
+        cb = fig.colorbar(im, cax=fig.add_subplot(gs[i, C]))
         cb.outline.set_visible(False); cb.ax.tick_params(length=0, labelsize=ps.FS["tick"])
-    ps.titles(fig, "One person's map, with and without the group pattern",
-              f"subject {config.sub_id(s)} (median individual part)  |  parcels sorted by Yeo-17 "
-              f"network  |  colour ±{vt:.2f} (top), ±{vb:.2f} (bottom)  |  $N$ = {n_sub}", top=0.84)
+    fig.suptitle("One person's map (with and without the group pattern)",
+                 fontsize=ps.FS["title"], fontweight="bold", color=ps.INK, y=0.99, va="top")
+    fig.text(0.5, 0.90, f"subject {config.sub_id(s)} (median individual part)  |  parcels sorted "
+             f"by Yeo-17 network  |  colour ±{vt:.2f} (top), ±{vb:.2f} (bottom)  |  $N$ = {n_sub}",
+             ha="center", va="top", fontsize=ps.FS["subtitle"], color=ps.SUBINK)
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'emerge')}")
 
 
