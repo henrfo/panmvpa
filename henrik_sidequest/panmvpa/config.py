@@ -91,6 +91,24 @@ ASSOCIATION = ["DefaultA", "DefaultB", "DefaultC", "ContA", "ContB", "ContC",
                "LimbicA", "LimbicB", "TempPar"]
 NETWORK_FAMILIES = {"association": ASSOCIATION, "sensorimotor": SENSORIMOTOR}
 
+# Full display names for the Yeo-17 systems -- used everywhere a network is shown to a reader
+# (figure labels, axis ticks) so nothing reads as an abbreviation.
+NETWORK_LABELS = {
+    "VisCent": "Visual central", "VisPeri": "Visual peripheral",
+    "SomMotA": "Somatomotor A", "SomMotB": "Somatomotor B",
+    "DorsAttnA": "Dorsal attention A", "DorsAttnB": "Dorsal attention B",
+    "SalVentAttnA": "Salience / ventral attention A",
+    "SalVentAttnB": "Salience / ventral attention B",
+    "LimbicA": "Limbic A", "LimbicB": "Limbic B",
+    "ContA": "Control A", "ContB": "Control B", "ContC": "Control C",
+    "DefaultA": "Default mode A", "DefaultB": "Default mode B", "DefaultC": "Default mode C",
+    "TempPar": "Temporal parietal",
+}
+
+
+def network_label(abbr: str) -> str:
+    return NETWORK_LABELS.get(abbr, abbr)
+
 # --- Data levels -----------------------------------------------------------
 # Rest runs are split into 16 equal chunks. A map is identified by (start chunk, number
 # of chunks), always a contiguous block, so every map at a given size is disjoint from
