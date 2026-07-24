@@ -28,6 +28,7 @@ rather than setting anything per-figure.
   vector — text stays sharp at any zoom, smaller file size.
 - Save with: `bbox_inches="tight", pad_inches=0.08, facecolor="white"` (a small margin so long
   rotated tick labels aren't trimmed flush to the edge).
+- PNGs are written at **`PNG_DPI = 200`** (crisp for slides); PDFs are vector so DPI is irrelevant.
 - These are collected in a `SAVE_KW` dict and unpacked at every `savefig` call.
 
 ## Fonts

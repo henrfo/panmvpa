@@ -56,6 +56,7 @@ INK, SUBINK, PANEL = "#111111", "#555555", "#222222"
 SPINE, TICKINK = "#cccccc", "#333333"
 
 SAVE_KW = dict(bbox_inches="tight", pad_inches=0.08, facecolor="white")
+PNG_DPI = 200                   # crisp PNGs for slides; PDFs are vector, dpi is irrelevant there
 
 
 def apply() -> None:
@@ -137,6 +138,7 @@ def save(fig, stem) -> str:
         d = stem.parent / ext
         d.mkdir(parents=True, exist_ok=True)
         out[ext] = d / f"{stem.name}.{ext}"
-        fig.savefig(out[ext], **SAVE_KW)
+        kw = {**SAVE_KW, "dpi": PNG_DPI} if ext == "png" else SAVE_KW
+        fig.savefig(out[ext], **kw)
     plt.close(fig)
     return str(out["png"])
