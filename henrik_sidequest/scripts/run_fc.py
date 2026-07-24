@@ -642,7 +642,7 @@ def _residual_figure(cur, n_sub) -> None:
         ax.plot(mins, cur["per"]["r_resid_reg"][s], color=c_res, lw=0.4, alpha=0.15)
     ax.plot(*seg(cmean("r_self")), "o-", color=c_self, lw=1.4, ms=3, label="vs own other half")
     ax.plot(*seg(cmean("r_resid_reg")), "o-", color=c_res, lw=1.4, ms=3,
-            label="vs own other half, group pattern removed")
+            label="vs own other half (group pattern removed)")
     ax.set(xlabel="minutes of rest", ylabel="correlation between maps", xlim=(0, hi))
     ps.style_ax(ax)
     ps.legend(ax, loc="lower right")
@@ -717,7 +717,7 @@ def _sampling_figure(cur, n_sub) -> None:
     label = {"first": "first minutes", "scatter": "scattered timepoints",
              "block": "1-min chunks from across all sessions"}
 
-    fig, axes = ps.plt.subplots(1, 2, figsize=(ps.FULL, 2.9), sharex=True)
+    fig, axes = ps.plt.subplots(1, 2, figsize=(ps.FULL, 3.2), sharex=True)
     for j, metric in enumerate(("r_self", "signal")):
         ax = axes[j]
         for name, per in modes.items():
@@ -737,15 +737,18 @@ def _sampling_figure(cur, n_sub) -> None:
                cmean(modes["first"], "r_self"))
     lo, up = np.minimum(f, s), np.maximum(f, s)
     frac_between = float(np.nanmean(((b >= lo - 1e-9) & (b <= up + 1e-9))[mid])) if mid.any() else 0.0
-    verdict = ("1-min chunks fall between first minutes and scattered at every rung, so both "
-               "session variety and number of independent samples contribute"
-               if frac_between >= 0.6 else
-               "1-min chunks track scattered — session variety dominates"
-               if np.nanmean(np.abs(b - s)[mid]) < np.nanmean(np.abs(b - f)[mid]) else
-               "1-min chunks track first minutes — sample count dominates")
+    if frac_between >= 0.6:
+        l1 = "1-min chunks fall between first minutes and scattered at every rung"
+        l2 = "so both session variety and number of independent samples contribute"
+    elif np.nanmean(np.abs(b - s)[mid]) < np.nanmean(np.abs(b - f)[mid]):
+        l1 = "1-min chunks track scattered timepoints, not first minutes"
+        l2 = "session variety dominates over number of independent samples"
+    else:
+        l1 = "1-min chunks track first minutes, not scattered"
+        l2 = "number of independent samples dominates over session variety"
+    subtitle = f"{l1}\n{l2}  (chunks meet first minutes at 1 min; compare from 3 min)  |  $N$ = {n_sub}"
     ps.titles(fig, "Which minutes you use, and how they are spread across sessions",
-              f"{verdict} (chunks meet first minutes at 1 min; compare from 3 min)  |  $N$ = {n_sub}",
-              top=0.82)
+              subtitle, top=0.78)
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'sampling')}")
 
     import csv
@@ -820,11 +823,12 @@ def _network_figure(cur, nb, target_min) -> None:
 
 
 def _nettraj_figure(cur, nb, n_sub) -> None:
-    """Per-network group-residual reliability vs data: association networks coloured, the rest
-    grey. All 17 in the legend, in the plot's own top-to-bottom order, coloured along that order."""
+    """Per-network group-residual reliability vs data. The data set the order (highest final
+    value first); the legend lists the networks in exactly that order and the colour runs along
+    it top-to-bottom, so the legend is a direct key to the stacked lines."""
     ps.apply()
     _, _, hi, _ = _fig_range(cur, n_sub)
-    names, assoc = nb["names"], set(config.ASSOCIATION)
+    names = nb["names"]
     ms = sorted({r["minutes"] for r in nb["rows"] if r["minutes"] <= hi})
     acc = {nm: {m: [] for m in ms} for nm in names}
     for r in nb["rows"]:
@@ -834,29 +838,21 @@ def _nettraj_figure(cur, nb, n_sub) -> None:
             acc[nm][r["minutes"]].append(r["r_resid_reg"])
     traj = {nm: np.array([np.mean(acc[nm][m]) if acc[nm][m] else np.nan for m in ms]) for nm in names}
     final = {nm: (traj[nm][-1] if len(ms) else np.nan) for nm in names}
-    # order = top-to-bottom in the plot (highest final value first); the legend and the colour
-    # gradient both follow it, so the palette runs dark->light down the ranking.
     order = sorted(names, key=lambda nm: (-final[nm] if np.isfinite(final[nm]) else np.inf))
-    assoc_ranked = [nm for nm in order if nm in assoc]
-    col = dict(zip(assoc_ranked, list(reversed(ps.sunset_colors(len(assoc_ranked))))))
-    line_color = lambda nm: col.get(nm, ps.GREY)
+    col = dict(zip(order, list(reversed(ps.sunset_colors(len(order))))))   # dark = high, light = low
 
     from matplotlib.lines import Line2D
     fig, ax = ps.plt.subplots(figsize=(ps.FULL * 0.66, 3.4))
-    for nm in names:                            # sensory / other: grey background
-        if nm not in assoc:
-            ax.plot(ms, traj[nm], color=ps.GREY, lw=0.9, alpha=0.6)
-    for nm in assoc_ranked:                       # association: warm palette along the ranking
+    for nm in order:                            # every line coloured by its rank
         ax.plot(ms, traj[nm], color=col[nm], lw=1.4)
-    handles = [Line2D([], [], color=line_color(nm), lw=1.8, label=config.network_label(nm))
-               for nm in order]
+    handles = [Line2D([], [], color=col[nm], lw=1.8, label=config.network_label(nm)) for nm in order]
     ax.legend(handles=handles, loc="center left", bbox_to_anchor=(1.02, 0.5),
               frameon=False, fontsize=ps.FS["legend"], labelcolor=ps.TICKINK,
               title="networks, high → low", title_fontsize=ps.FS["legend"])
     ax.set(xlabel="minutes of rest", ylabel="match to own map (group removed)", xlim=(0, hi))
     ps.style_ax(ax)
     ps.titles(fig, "Individuality by network",
-              f"$N$ = {n_sub} people  |  association coloured, sensory grey  |  to {hi:.0f} min")
+              f"$N$ = {n_sub} people  |  coloured by rank, high → low  |  to {hi:.0f} min")
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'nettraj')}")
 
 
