@@ -829,7 +829,7 @@ def _nettraj_figure(cur, nb, n_sub) -> None:
     traj = {nm: np.array([np.mean(acc[nm][m]) if acc[nm][m] else np.nan for m in ms]) for nm in names}
     final = {nm: (traj[nm][-1] if len(ms) else np.nan) for nm in names}
     ranked = sorted((nm for nm in names if np.isfinite(final[nm])), key=lambda nm: final[nm])
-    named = list(reversed(ranked[-3:])) + ranked[:2]   # top 3 then bottom 2, for the legend
+    named = list(reversed(ranked[-2:])) + ranked[:2]   # top 2 then bottom 2, for the legend
     assoc_names = [nm for nm in names if nm in assoc]
     col = dict(zip(assoc_names, ps.sunset_colors(len(assoc_names))))
 
