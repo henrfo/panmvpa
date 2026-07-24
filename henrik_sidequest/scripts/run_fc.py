@@ -767,7 +767,7 @@ def _sampling_figure(cur, n_sub) -> None:
     ps.legend(axes[0], loc="lower right", handles=h[::-1], labels=lab[::-1])
 
     ps.titles(fig, "Minutes versus data spread",
-              f"same total minutes across three ways of distributing them  |  $N$ = {n_sub} people")
+              f"the same total minutes across three ways of distributing them  |  $N$ = {n_sub} people")
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'sampling')}")
 
     import csv
