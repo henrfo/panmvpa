@@ -638,6 +638,9 @@ def _analysis_figure(cur, n_sub) -> None:
     c_self, c_near = ps.SUNSET(0.30), ps.ACCENT   # darkest on the top (r_self) line
 
     fig, ax = ps.plt.subplots(figsize=(ps.HALF, 2.9))
+    # The gap between the two means IS the individual signal -- a subtle shade so it reads.
+    ax.fill_between(mins, near, rs, where=full & np.isfinite(rs) & np.isfinite(near),
+                    color="0.55", alpha=0.12, lw=0, label="individual signal (the gap)")
     for key, mean, color in (("r_self", rs, c_self), ("near", near, c_near)):
         lo, up = _bootstrap_band(cur["per"][key], cur["subs"])   # 95% CI, subject bootstrap
         ax.fill_between(mins, lo, up, where=full & np.isfinite(lo) & np.isfinite(up),
@@ -677,7 +680,7 @@ def _residual_figure(cur, n_sub, cur_off=None) -> None:
     ax.set(xlabel="minutes of rest", ylabel="correlation between maps", xlim=(0, hi))
     ps.style_ax(ax)
     ps.legend(ax, loc="lower right")
-    ps.titles(fig, "Matching your own map, before and after removing the group",
+    ps.titles(fig, "Matching your own map (with and without the group pattern)",
               f"$N$ = {n_sub} people  |  1–{hi:.0f} min  |  shaded: 95% CI  |  "
               f"group = average of the other {n_sub - 1}")
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'residual')}")
@@ -773,13 +776,13 @@ def _sampling_figure(cur, n_sub) -> None:
     frac_between = float(np.nanmean(((b >= lo - 1e-9) & (b <= up + 1e-9))[mid])) if mid.any() else 0.0
     if frac_between >= 0.6:
         l1 = "1-min chunks fall between first minutes and scattered at every rung"
-        l2 = "so both session variety and number of independent samples contribute"
+        l2 = "so both session variety and spread-out sampling contribute"
     elif np.nanmean(np.abs(b - s)[mid]) < np.nanmean(np.abs(b - f)[mid]):
         l1 = "1-min chunks track scattered timepoints, not first minutes"
-        l2 = "session variety dominates over number of independent samples"
+        l2 = "session variety dominates over spread-out sampling"
     else:
         l1 = "1-min chunks track first minutes, not scattered"
-        l2 = "number of independent samples dominates over session variety"
+        l2 = "spread-out sampling dominates over session variety"
     subtitle = f"{l1}\n{l2}  (chunks meet first minutes at 1 min; compare from 3 min)  |  $N$ = {n_sub}"
     ps.titles(fig, "Which minutes you use, and how they are spread across sessions",
               subtitle, top=0.78)
@@ -846,7 +849,7 @@ def _network_figure(cur, nb, target_min) -> None:
     im1 = ax[1].imshow(S, cmap=ps.SUNSET_HI)   # dark = more
     ax[1].set_xticks(range(K)); ax[1].set_xticklabels(full_names, rotation=90, fontsize=ps.FS["tick"])
     ax[1].set_yticks(range(K)); ax[1].set_yticklabels(full_names, fontsize=ps.FS["tick"])
-    ps.panel(ax[1], 1, f"match to own map, group removed ({target_min:.0f} min)")
+    ps.panel(ax[1], 1, "match to own network (group removed)")
     ps.colorbar(fig, im1, ax[1])
     for a in ax:
         a.tick_params(length=0)
@@ -857,9 +860,11 @@ def _network_figure(cur, nb, target_min) -> None:
 
 
 def _nettraj_figure(cur, nb, n_sub) -> None:
-    """Per-network group-residual reliability vs data. The data set the order (highest final
-    value first); the legend lists the networks in exactly that order and the colour runs along
-    it top-to-bottom, so the legend is a direct key to the stacked lines."""
+    """Per-network group-residual reliability vs data. Each network's value is the mean over
+    EVERY block it participates in (its within-network block plus every between-network block
+    that includes it), not the diagonal alone. The data set the order (highest final value
+    first); the legend lists the networks in that order and the colour runs along it top-to-
+    bottom, so the legend is a direct key to the stacked lines."""
     ps.apply()
     _, _, hi, _ = _fig_range(cur, n_sub)
     names = nb["names"]
@@ -885,8 +890,8 @@ def _nettraj_figure(cur, nb, n_sub) -> None:
               title="networks, high → low", title_fontsize=ps.FS["legend"])
     ax.set(xlabel="minutes of rest", ylabel="match to own map (group removed)", xlim=(0, hi))
     ps.style_ax(ax)
-    ps.titles(fig, "Individuality by network",
-              f"$N$ = {n_sub} people  |  coloured by rank, high → low  |  to {hi:.0f} min")
+    ps.titles(fig, "Reliability of the individual pattern per network",
+              f"$N$ = {n_sub} people  |  mean over all blocks involving the network  |  to {hi:.0f} min")
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'nettraj')}")
 
 
