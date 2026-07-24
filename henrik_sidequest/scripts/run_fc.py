@@ -751,9 +751,10 @@ def _sampling_figure(cur, n_sub) -> None:
     cmean = lambda per, k: _colmean(np.vstack([per[k][s] for s in cur["subs"]]))
     style = {"first": (ps.SUNSET(0.30), "o-"), "scatter": (ps.SUNSET(0.55), "^--"),
              "block": (ps.ACCENT, "s-.")}
+    tpm = int(round(60.0 / TR))            # timepoints per minute (44 at this TR), from TR not fixed
     label = {"first": "one continuous block (from the start)",
-             "block": "1-minute blocks from different sessions (44 timepoints each)",
-             "scatter": "individual timepoints drawn at random (44 per minute)"}
+             "block": f"1-minute blocks from different sessions ({tpm} timepoints each)",
+             "scatter": f"individual timepoints drawn at random ({tpm} per minute)"}
 
     fig, axes = ps.plt.subplots(1, 2, figsize=(ps.FULL, 3.2), sharex=True)
     for j, metric in enumerate(("r_self", "signal")):
