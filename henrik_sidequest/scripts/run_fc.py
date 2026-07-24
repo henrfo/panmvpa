@@ -297,10 +297,70 @@ def identity_curves(sess: dict[str, dict[int, list[dict]]], gsr: bool) -> dict:
 
     stack = lambda k: np.vstack([per[k][s] for s in subs])
     out = {"minutes": LADDER, "subs": subs, "per": per,
+           "first_half": first_half, "ref_edges": ref_edges,   # reused by the network breakdown
            "n": np.sum(~np.isnan(stack("r_self")), axis=0)}
     for k in keys:
         out[k + "_mean"] = _colmean(stack(k))   # hit_mean == hit rate (mean of 0/1)
     return out
+
+
+def _parcel_networks() -> tuple[np.ndarray, list[str]]:
+    """(net_of_parcel, network_names): the Yeo-17 network index (0..16) of each Schaefer
+    parcel column, from the atlas metadata we have been ignoring. Column j of the parcel
+    matrix is label j+1 (labels are 1..400 contiguous), matching the atlas order file."""
+    from panmvpa import parcellation
+    order = list(parcellation.network_order())
+    nets = np.full(config.N_PARCELS, -1, dtype=int)
+    for pid, name in parcellation._parcel_names().items():
+        net = parcellation._net_of(name)
+        if net in order:
+            nets[pid - 1] = order.index(net)
+    return nets, order
+
+
+def network_breakdown(cur: dict, target_min: float) -> dict:
+    """Split the FC edge vector by Yeo-17 network pair and, at `target_min`, compute r_self /
+    nearest / signal per block -- which systems carry the individual signal, which are generic.
+    Reuses the cleaned first halves and reference edges from identity_curves (no re-cleaning).
+    """
+    subs, first_half, ref_edges = cur["subs"], cur["first_half"], cur["ref_edges"]
+    nets, names = _parcel_networks()
+    K = len(names)
+    iu = np.triu_indices(config.N_PARCELS, k=1)
+    lo, hi = np.minimum(nets[iu[0]], nets[iu[1]]), np.maximum(nets[iu[0]], nets[iu[1]])
+    block_idx = {(p, q): np.where((lo == p) & (hi == q))[0]
+                 for p in range(K) for q in range(p, K)}
+    block_idx = {k: v for k, v in block_idx.items() if v.size >= 3}
+
+    n = int(round(target_min * 60.0 / TR))
+    grow = {s: fc_edges(first_half[s][:n]) for s in subs
+            if MIN_TP <= n <= first_half[s].shape[0]}
+    valid = list(grow)
+    blocks = []
+    for (p, q), idx in block_idx.items():
+        rs_l, nr_l, sg_l = [], [], []
+        for s in valid:
+            gb, sb = grow[s][idx], ref_edges[s][idx]
+            rs = _corr(gb, sb)
+            others = [_corr(gb, ref_edges[b][idx]) for b in valid if b != s]
+            if not others:
+                continue
+            near = max(others)
+            rs_l.append(rs); nr_l.append(near); sg_l.append(rs - near)
+        if rs_l:
+            blocks.append({"p": p, "q": q, "pair": (names[p], names[q]), "edges": idx.size,
+                           "r_self": float(np.mean(rs_l)), "near": float(np.mean(nr_l)),
+                           "signal": float(np.mean(sg_l))})
+
+    net_sig: dict[int, list[float]] = {k: [] for k in range(K)}
+    for b in blocks:
+        net_sig[b["p"]].append(b["signal"])
+        if b["q"] != b["p"]:
+            net_sig[b["q"]].append(b["signal"])
+    net_rank = sorted(((names[k], float(np.mean(v))) for k, v in net_sig.items() if v),
+                      key=lambda kv: -kv[1])
+    return {"blocks": blocks, "names": names, "nets": nets, "valid": valid,
+            "net_rank": net_rank, "target_min": target_min}
 
 
 def _slope(minutes: np.ndarray, values: np.ndarray, lo: float, hi: float) -> float:
@@ -551,6 +611,21 @@ def stage_analyze(subjects) -> None:
               f"{'together' if both_close < 3 else 'at different times'} "
               f"(median |r_self−signal| = {both_close:.1f} min)")
 
+    # Network-level breakdown at the last full-cohort rung: which Yeo-17 systems carry the
+    # individual signal, which are generic.
+    if len(fi) and n_sub >= 2:
+        nb = network_breakdown(cur, hi_full)
+        print(f"\nnetwork breakdown at {hi_full:.0f} min (Yeo-17, {len(nb['valid'])} subjects):")
+        print("  system carries individual signal (mean block signal, high → generic):")
+        for name, s in nb["net_rank"]:
+            print(f"    {name:14s} {s:+.3f}")
+        by_sig = sorted(nb["blocks"], key=lambda b: -b["signal"])
+        print("  most individual blocks:  " + ", ".join(
+            f"{b['pair'][0]}–{b['pair'][1]} {b['signal']:+.3f}" for b in by_sig[:4]))
+        print("  most generic blocks:     " + ", ".join(
+            f"{b['pair'][0]}–{b['pair'][1]} {b['signal']:+.3f}" for b in by_sig[-4:]))
+        _network_figure(cur, nb)
+
     _analysis_figure(cur, table, n_sub)
 
 
@@ -569,48 +644,89 @@ def _analysis_figure(cur, table, n_sub) -> None:
     seg = lambda y, mask: (np.where(mask, mins, np.nan), np.where(mask, y, np.nan))
     fig, ax = plt.subplots(2, 1, figsize=(9, 8.5), sharex=True)
 
-    # Top: r_self vs nearest impostor, signal shaded (full-cohort rungs only); group floor
-    # dotted; a thin line per subject behind. The n<n_sub tail is drawn thin-grey, not bold --
-    # the 80-min point can be a single subject and must not read as the headline.
+    # Top: r_self and the group floor (mean of others) with the gap shaded between them, plus
+    # the nearest impostor as a thin reference. A thin line per subject behind each bold mean;
+    # the n<n_sub tail is thin-grey so the 80-min single-subject point is not the headline.
     for sid in cur["subs"]:
-        ax[0].plot(mins, cur["per"]["r_self"][sid], color="C0", lw=0.5, alpha=0.22)
-        ax[0].plot(mins, cur["per"]["near"][sid], color="C1", lw=0.5, alpha=0.22)
-    ax[0].fill_between(mins, near, rs, where=full & np.isfinite(rs) & np.isfinite(near),
-                       color="C2", alpha=0.15, label="signal = r_self − nearest")
+        ax[0].plot(mins, cur["per"]["r_self"][sid], color="C0", lw=0.5, alpha=0.20)
+        ax[0].plot(mins, cur["per"]["floor"][sid], color="C1", lw=0.5, alpha=0.20)
+    ax[0].fill_between(mins, floor, rs, where=full & np.isfinite(rs) & np.isfinite(floor),
+                       color="C2", alpha=0.15, label="gap = r_self − floor")
     ax[0].plot(*seg(rs, tail), color="0.6", lw=1, ls="--")
-    ax[0].plot(*seg(near, tail), color="0.6", lw=1, ls="--", label=f"n < {n_sub} (de-emphasised)")
+    ax[0].plot(*seg(floor, tail), color="0.6", lw=1, ls="--", label=f"n < {n_sub} (de-emphasised)")
     ax[0].plot(*seg(rs, full), "o-", color="C0", lw=2, label="r_self (own other half)")
-    ax[0].plot(*seg(near, full), "s-", color="C1", lw=2, label="nearest other (competitor)")
-    ax[0].plot(*seg(floor, full), ":", color="C3", lw=1.4, label="group floor (mean of others)")
-    ymin = np.nanmin([np.nanmin(near[full]) if full.any() else 0.5, 0.5])
+    ax[0].plot(*seg(floor, full), "s-", color="C1", lw=2, label="group floor (mean of others)")
+    ax[0].plot(*seg(near, full), "-", color="C4", lw=1.2, alpha=0.8,
+               label="nearest impostor (max)")
+    ymin = np.nanmin([np.nanmin(floor[full]) if full.any() else 0.5, 0.5])
     for i, m in enumerate(mins):
         if npr[i] > 0:
             ax[0].annotate(str(npr[i]), (m, ymin), fontsize=6, ha="center",
                            color="0.5" if full[i] else "C3")
     ax[0].set(ylabel="FC edge correlation (r)",
-              title=f"Identification: r_self vs nearest impostor (bold = n={n_sub})")
+              title=f"Reliability vs generic floor: r_self and floor (bold = n={n_sub})")
     ax[0].legend(fontsize=8, loc="lower right")
 
-    # Bottom: the signal itself (dropped headroom -- its denominator moves), with the SVM
-    # margin on a twin axis. Accuracy dropped entirely -- pinned at 1.0.
+    # Bottom: the individual signal (r_self − nearest), thin line per subject behind the mean.
+    # Accuracy and SVM margin dropped -- this panel is the distinctiveness curve.
+    for sid in cur["subs"]:
+        ax[1].plot(mins, cur["per"]["signal"][sid], color="C2", lw=0.5, alpha=0.25)
     ax[1].plot(*seg(sig, tail), color="0.6", lw=1, ls="--")
-    l1, = ax[1].plot(*seg(sig, full), "o-", color="C2", label="signal (distinctiveness)")
+    ax[1].plot(*seg(sig, full), "o-", color="C2", lw=2, label="signal = r_self − nearest")
+    ax[1].axhline(0, color="0.7", lw=0.8)
     ax[1].set(xlabel="minutes of rest (linear)", ylabel="signal = r_self − nearest",
-              title="Distinctiveness (signal, no ceiling) vs SVM margin (dies at 40 min)")
-    handles = [l1]
-    ok = [r for r in table if "acc_fc" in r]
-    if ok:
-        axr = ax[1].twinx()
-        l2, = axr.plot([r["min"] for r in ok], [r["margin_fc"] for r in ok],
-                       "s--", color="C4", label="SVM margin (right)")
-        axr.set_ylabel("SVM margin (true − runner-up)")
-        handles.append(l2)
-    ax[1].legend(handles, [h.get_label() for h in handles], fontsize=8, loc="upper left")
+              title="Individual signal (distinctiveness), per subject behind the mean")
+    ax[1].legend(fontsize=8, loc="lower right")
     fig.tight_layout()
     config.FC_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out = config.FC_RESULTS_DIR / "curves.png"
     fig.savefig(out, dpi=120); plt.close(fig)
-    print(f"\nfigure -> {out}")
+    print(f"figure -> {out}")
+
+
+def _network_figure(cur, nb) -> None:
+    """Two panels: the mean reference FC with parcels sorted by Yeo-17 network (blocks line up
+    with named systems), and the 17x17 individual-signal-per-block matrix."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    nets, names, K = nb["nets"], nb["names"], len(nb["names"])
+    order = np.argsort(nets, kind="stable")           # parcels grouped by network
+    sorted_nets = nets[order]
+    sizes = [int(np.sum(sorted_nets == k)) for k in range(K)]
+    bounds = np.cumsum(sizes)
+    centers = bounds - np.array(sizes) / 2.0
+
+    mean_edges = np.mean(np.vstack([cur["ref_edges"][s] for s in nb["valid"]]), axis=0)
+    M = np.zeros((config.N_PARCELS, config.N_PARCELS))
+    iu = np.triu_indices(config.N_PARCELS, k=1)
+    M[iu] = mean_edges
+    M = M + M.T
+    np.fill_diagonal(M, 1.0)
+    Ms = M[np.ix_(order, order)]
+
+    S = np.full((K, K), np.nan)
+    for b in nb["blocks"]:
+        S[b["p"], b["q"]] = S[b["q"], b["p"]] = b["signal"]
+
+    fig, ax = plt.subplots(1, 2, figsize=(15, 7))
+    im0 = ax[0].imshow(Ms, cmap="RdBu_r", vmin=-0.5, vmax=0.5)
+    for b in bounds[:-1]:
+        ax[0].axhline(b - 0.5, color="k", lw=0.4); ax[0].axvline(b - 0.5, color="k", lw=0.4)
+    ax[0].set_xticks(centers); ax[0].set_xticklabels(names, rotation=90, fontsize=7)
+    ax[0].set_yticks(centers); ax[0].set_yticklabels(names, fontsize=7)
+    ax[0].set_title("Mean reference FC, 400 parcels sorted by Yeo-17 network")
+    fig.colorbar(im0, ax=ax[0], fraction=0.046)
+
+    im1 = ax[1].imshow(S, cmap="viridis")
+    ax[1].set_xticks(range(K)); ax[1].set_xticklabels(names, rotation=90, fontsize=7)
+    ax[1].set_yticks(range(K)); ax[1].set_yticklabels(names, fontsize=7)
+    ax[1].set_title(f"Individual signal per network block @ {nb['target_min']:.0f} min")
+    fig.colorbar(im1, ax=ax[1], fraction=0.046)
+    fig.tight_layout()
+    out = config.FC_RESULTS_DIR / "networks.png"
+    fig.savefig(out, dpi=120); plt.close(fig)
+    print(f"figure -> {out}")
 
 
 # ---------------------------------------------------------------- entry

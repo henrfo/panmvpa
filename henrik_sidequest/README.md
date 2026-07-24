@@ -133,10 +133,17 @@ the spread is tight — otherwise it is averaging a 15-min subject with a 60-min
   example to hold out. A **connectivity-free control** (per-parcel temporal mean/SD) tests how
   much identity is anatomy rather than covariance.
 
-The figure is two panels on a shared linear x: **top** r_self and nearest with the signal
-shaded and the group floor dotted (thin line per subject, *n* per rung, n<10 rungs greyed);
-**bottom** the signal with the SVM margin on a twin axis — distinctiveness with no ceiling
-against a margin that dies at 40 min. Accuracy is dropped entirely.
+`curves.png` is two panels on a shared linear x, a thin line per subject behind every bold
+mean and the n<10 tail greyed: **top** r_self and the group floor with the gap shaded (nearest
+impostor a thin reference line); **bottom** the individual signal. Accuracy and the SVM margin
+are dropped from the figure (the SVM stays in the text tables).
+
+**Network-level breakdown.** Schaefer-400 parcels carry Yeo-17 labels in the atlas metadata,
+so the edge vector splits by network pair. At the last full-cohort rung, r_self / nearest /
+signal are computed per network block, and the output ranks which systems carry the individual
+signal and which are generic (per-system and top/bottom blocks). `networks.png` shows the mean
+reference FC with the 400 parcels **sorted by network** (blocks line up with named systems
+instead of being unreadable) beside the 17×17 signal-per-block matrix.
 
 ```bash
 python scripts/run_fc.py inspect --subjects PAN01           # reduce ONE run, look, delete nothing
