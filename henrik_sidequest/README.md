@@ -169,8 +169,11 @@ survives changes to the metric it came from; a CSV doesn't). It prints the subje
 - `networks.png` — the mean reference FC with the 400 parcels **sorted by Yeo-17 network**
   (blocks line up with named systems) beside the 17×17 group-residual-per-block matrix at the
   last full-cohort rung.
-- `nettraj.png` — group-residual reliability per Yeo-17 network vs data, association systems
-  coloured and the sensory ones greyed, only the extreme few labelled.
+- `nettraj.png` — group-residual reliability per Yeo-17 network vs data, all 17 coloured by
+  rank (dark = high). **Two panels**: (a) mean over every block the network touches, (b) its
+  within-network block only. Colours are fixed by panel (a)'s ranking and shared, so if panel
+  (b)'s gradient stays ordered top-to-bottom the two rankings agree (robustness); if it
+  scrambles, they differ (a result).
 
 Outputs are sorted by type under `results/fc/<version>/`: **`csv/`**, **`pdf/`** (paper), and
 **`png/`** (viewing). Every figure is written as both PDF and PNG and follows one shared style —

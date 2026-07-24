@@ -860,38 +860,49 @@ def _network_figure(cur, nb, target_min) -> None:
 
 
 def _nettraj_figure(cur, nb, n_sub) -> None:
-    """Per-network group-residual reliability vs data. Each network's value is the mean over
-    EVERY block it participates in (its within-network block plus every between-network block
-    that includes it), not the diagonal alone. The data set the order (highest final value
-    first); the legend lists the networks in that order and the colour runs along it top-to-
-    bottom, so the legend is a direct key to the stacked lines."""
+    """Per-network group-residual reliability vs data, two panels: (a) mean over EVERY block the
+    network touches (within + all between), (b) its WITHIN-network block only (the diagonal).
+    Colours are fixed by the panel-(a) ranking and shared, so if panel (b)'s gradient stays
+    dark->light top-to-bottom the two rankings agree (robustness); if it scrambles, they differ
+    (a result). The legend, ordered by panel (a), is a direct key to both panels' lines."""
     ps.apply()
     _, _, hi, _ = _fig_range(cur, n_sub)
     names = nb["names"]
     ms = sorted({r["minutes"] for r in nb["rows"] if r["minutes"] <= hi})
-    acc = {nm: {m: [] for m in ms} for nm in names}
-    for r in nb["rows"]:
-        if r["minutes"] > hi or not np.isfinite(r["r_resid_reg"]):
-            continue
-        for nm in ({r["a"], r["b"]}):          # every block counts toward both its networks
-            acc[nm][r["minutes"]].append(r["r_resid_reg"])
-    traj = {nm: np.array([np.mean(acc[nm][m]) if acc[nm][m] else np.nan for m in ms]) for nm in names}
-    final = {nm: (traj[nm][-1] if len(ms) else np.nan) for nm in names}
+
+    def build(within_only: bool) -> dict:
+        acc = {nm: {m: [] for m in ms} for nm in names}
+        for r in nb["rows"]:
+            if r["minutes"] > hi or not np.isfinite(r["r_resid_reg"]):
+                continue
+            touched = [r["a"]] if r["a"] == r["b"] else ([] if within_only else [r["a"], r["b"]])
+            for nm in touched:
+                acc[nm][r["minutes"]].append(r["r_resid_reg"])
+        return {nm: np.array([np.mean(acc[nm][m]) if acc[nm][m] else np.nan for m in ms])
+                for nm in names}
+
+    traj_all, traj_win = build(False), build(True)
+    final = {nm: (traj_all[nm][-1] if len(ms) else np.nan) for nm in names}
     order = sorted(names, key=lambda nm: (-final[nm] if np.isfinite(final[nm]) else np.inf))
-    col = dict(zip(order, list(reversed(ps.sunset_colors(len(order))))))   # dark = high, light = low
+    col = dict(zip(order, list(reversed(ps.sunset_colors(len(order))))))   # fixed by panel (a)
 
     from matplotlib.lines import Line2D
-    fig, ax = ps.plt.subplots(figsize=(ps.FULL * 0.66, 3.4))
-    for nm in order:                            # every line coloured by its rank
-        ax.plot(ms, traj[nm], color=col[nm], lw=1.4)
+    fig, axes = ps.plt.subplots(1, 2, figsize=(ps.FULL * 1.25, 3.4), sharex=True)
+    for j, (ax, traj, name) in enumerate([(axes[0], traj_all, "all blocks the network touches"),
+                                          (axes[1], traj_win, "within-network block only")]):
+        for nm in order:
+            ax.plot(ms, traj[nm], color=col[nm], lw=1.4)
+        ax.set(xlabel="minutes of rest", xlim=(0, hi))
+        ps.style_ax(ax)
+        ps.panel(ax, j, name)
+    axes[0].set_ylabel("match to own network (group removed)")
     handles = [Line2D([], [], color=col[nm], lw=1.8, label=config.network_label(nm)) for nm in order]
-    ax.legend(handles=handles, loc="center left", bbox_to_anchor=(1.02, 0.5),
-              frameon=False, fontsize=ps.FS["legend"], labelcolor=ps.TICKINK,
-              title="networks, high → low", title_fontsize=ps.FS["legend"])
-    ax.set(xlabel="minutes of rest", ylabel="match to own map (group removed)", xlim=(0, hi))
-    ps.style_ax(ax)
+    axes[1].legend(handles=handles, loc="center left", bbox_to_anchor=(1.02, 0.5),
+                   frameon=False, fontsize=ps.FS["legend"], labelcolor=ps.TICKINK,
+                   title="networks, high → low (panel a)", title_fontsize=ps.FS["legend"])
     ps.titles(fig, "Reliability of the individual pattern per network",
-              f"$N$ = {n_sub} people  |  mean over all blocks involving the network  |  to {hi:.0f} min")
+              f"$N$ = {n_sub} people  |  colours fixed by panel (a)'s ranking  |  to {hi:.0f} min",
+              top=0.80)
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'nettraj')}")
 
 
