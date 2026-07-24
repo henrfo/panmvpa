@@ -937,9 +937,9 @@ def _emerge_figure(cur, n_sub) -> None:
 
     # Dedicated colorbar cell per row (a narrow last column) so nothing overlaps the panels.
     C = len(cols)
-    fig = ps.plt.figure(figsize=(ps.FULL, 4.2))
-    gs = fig.add_gridspec(2, C + 1, width_ratios=[1] * C + [0.06],
-                          left=0.07, right=0.93, top=0.82, bottom=0.05, wspace=0.1, hspace=0.16)
+    fig = ps.plt.figure(figsize=(ps.FULL, 4.5))
+    gs = fig.add_gridspec(2, C + 1, width_ratios=[1] * C + [0.045],
+                          left=0.06, right=0.93, top=0.80, bottom=0.06, wspace=0.16, hspace=0.22)
     for i, (rlab, mats, vmax) in enumerate((("whole map", whole, vt),
                                             ("individual part", resid, vb))):
         im = None
