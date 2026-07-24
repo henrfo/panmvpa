@@ -751,8 +751,9 @@ def _sampling_figure(cur, n_sub) -> None:
     cmean = lambda per, k: _colmean(np.vstack([per[k][s] for s in cur["subs"]]))
     style = {"first": (ps.SUNSET(0.30), "o-"), "scatter": (ps.SUNSET(0.55), "^--"),
              "block": (ps.ACCENT, "s-.")}
-    label = {"first": "first minutes", "scatter": "scattered timepoints",
-             "block": "1-min chunks from across all sessions"}
+    label = {"first": "one continuous block (from the start)",
+             "block": "1-minute blocks from different sessions (44 timepoints each)",
+             "scatter": "individual timepoints drawn at random (44 per minute)"}
 
     fig, axes = ps.plt.subplots(1, 2, figsize=(ps.FULL, 3.2), sharex=True)
     for j, metric in enumerate(("r_self", "signal")):
@@ -765,10 +766,12 @@ def _sampling_figure(cur, n_sub) -> None:
         ps.panel(ax, j, "vs own other half" if metric == "r_self" else "individual signal")
     axes[0].set_ylabel("correlation between maps")
     h, lab = axes[0].get_legend_handles_labels()
-    ps.legend(axes[0], loc="lower right", handles=h[::-1], labels=lab[::-1])
-
     ps.titles(fig, "Minutes versus data spread",
               f"the same total minutes across three ways of distributing them  |  $N$ = {n_sub} people")
+    # Long descriptive labels -> legend below the panels (first at the bottom), not in-axes.
+    fig.legend(h[::-1], lab[::-1], loc="upper center", bbox_to_anchor=(0.5, 0.02),
+               frameon=False, fontsize=ps.FS["legend"], labelcolor=ps.TICKINK, ncol=1,
+               handlelength=2.4, borderaxespad=0)
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'sampling')}")
 
     import csv
