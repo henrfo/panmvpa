@@ -388,6 +388,21 @@ def _final(minutes: np.ndarray, values: np.ndarray) -> tuple[float, float]:
     return (float(values[fin[-1]]), float(minutes[fin[-1]])) if len(fin) else (float("nan"), float("nan"))
 
 
+def _saturation_verdict(t_signal: float, t_reliability: float, tol: float = 2.0) -> str | None:
+    """Which saturates first, DISTINCTIVENESS (signal) or RELIABILITY (r_self) -- read off the
+    signal directly, so the conclusion follows the data. (An earlier version compared reliability
+    to headroom, whose moving denominator can rise while the signal falls; on the honest signal
+    the direction can reverse, so this must never be a fixed claim.)"""
+    if not (np.isfinite(t_signal) and np.isfinite(t_reliability)):
+        return None
+    d = t_signal - t_reliability
+    if abs(d) <= tol:
+        return "distinctiveness and reliability saturate together"
+    if d < 0:
+        return "distinctiveness (signal) saturates BEFORE reliability"
+    return "distinctiveness (signal) keeps accruing AFTER reliability flattens"
+
+
 # SVM ladder is separate from the overlap ladder and capped: an example eats X minutes, so
 # larger X means fewer examples. At X=20 a session is one example (~8/subject); by X=40 an
 # example spans two sessions (~4/subject); past that there is nothing to train on. The curve
@@ -567,6 +582,9 @@ def stage_analyze(subjects) -> None:
     if np.isfinite(self_fin):
         print(f"  r_self (reliability)     to 90% of its {hi_full:.0f}-min value {self_fin:.3f}: {fmt(t_self)}")
         print(f"  signal (distinctiveness) to 90% of its {hi_full:.0f}-min value {sig_fin:+.3f}: {fmt(t_sig)}")
+    verdict = _saturation_verdict(t_sig, t_self)
+    if verdict:
+        print(f"  -> {verdict} (signal 90% {fmt(t_sig)} vs r_self 90% {fmt(t_self)})")
     if len(hits):
         print(f"  nearest-neighbour hit rate reaches 100% at: {mins[hits[0]]:.1f} min (ceilings)")
 
@@ -604,12 +622,15 @@ def stage_analyze(subjects) -> None:
     print()
     spread(ps_self, "r_self 90%")
     spread(ps_sig, "signal 90%")
-    if np.isfinite(t_self) and np.isfinite(t_sig):
-        both_close = abs(np.nanmedian([a - b for a, b in zip(ps_self, ps_sig)
-                                       if np.isfinite(a) and np.isfinite(b)]))
-        print(f"  within-subject: reliability and distinctiveness saturate "
-              f"{'together' if both_close < 3 else 'at different times'} "
-              f"(median |r_self−signal| = {both_close:.1f} min)")
+    # Directional within-subject median (signal − r_self), so it says which comes first, not
+    # just that they differ -- and it is the median OF PER-SUBJECT differences, not a difference
+    # of medians, so it reflects each subject compared to itself.
+    diffs = [g - s for s, g in zip(ps_self, ps_sig) if np.isfinite(s) and np.isfinite(g)]
+    if diffs:
+        med = float(np.median(diffs))
+        v = _saturation_verdict(med, 0.0)   # sign of (signal − r_self) is what matters
+        print(f"  within-subject: {v} (median signal−r_self = {med:+.1f} min "
+              f"across {len(diffs)} subjects)")
 
     # Network-level breakdown at the last full-cohort rung: which Yeo-17 systems carry the
     # individual signal, which are generic.
