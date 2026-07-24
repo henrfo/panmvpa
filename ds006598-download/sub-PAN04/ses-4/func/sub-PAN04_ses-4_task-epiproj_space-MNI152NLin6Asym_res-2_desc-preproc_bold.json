@@ -1,0 +1,9 @@
+{
+  "DelayTime": 0.16749999999999998,
+  "RepetitionTime": 1.355,
+  "Resolution": "Template MNI152NLin6Asym (2.0x2.0x2.0 mm^3), curated by TemplateFlow 23.1.0",
+  "SkullStripped": true,
+  "SliceTimingCorrected": false,
+  "TaskName": "EpisodicProjection",
+  "SpatialReference": "MNI152NLin6Asym:res-2"
+}

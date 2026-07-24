@@ -1,0 +1,12 @@
+{
+  "Name": "AFNI timing files",
+  "BIDSVersion": "1.2.0",
+  "DatasetType": "derivative",
+  "Description": "timing files to run the AFNI task scripts.",
+  "GeneratedBy": [
+    {
+      "Name": "AFNI",
+      "Description": "AFNI-style timing files (.1D)"
+    }
+  ]
+}

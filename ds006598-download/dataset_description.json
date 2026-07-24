@@ -1,0 +1,26 @@
+{
+    "Name": "PAN: Precision targeting of Association Networks",
+    "Authors": [
+        "Zach Ladwig",
+        "Kian Z. Kermani",
+        "Ally Dworetsky",
+        "Nathan Labora",
+        "Joanna J. Hernandez",
+        "Megan Dorn",
+        "Derek M. Smith",
+        "Derek Evan Nee",
+        "Rodrigo M. Braga",
+        "Caterina Gratton"
+    ],
+    "HowToAcknowledge": "When using this data, please cite Ladwig et al., Precision fMRI reveals densely interdigitated network patches with conserved motifs in the lateral prefrontal cortex and include the following: 'This data was obtained from the OpenNeuro database. Its accession number is ds006598'",
+    "License": "CC0",
+    "BIDSVersion": "1.2.0",
+    "DatasetType": "derivative",
+    "GeneratedBy": [
+        {
+            "Name": "fMRIPrep",
+            "Version": "23.2.0"
+        }
+    ],
+    "DatasetDOI": "doi:10.18112/openneuro.ds006598.v1.0.0"
+}

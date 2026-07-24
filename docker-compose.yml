@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+   neurodesk:
+      image: vnmd/neurodesktop:2026-07-21
+      ports:
+         - "8888:8888"
+      volumes:
+         - ${PWD}:/home/jovyan/mnt
+      privileged: true
+      user: root
