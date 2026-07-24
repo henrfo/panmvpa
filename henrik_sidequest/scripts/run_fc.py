@@ -669,10 +669,10 @@ def _residual_figure(cur, n_sub, cur_off=None) -> None:
             ("r_resid_reg", cur["r_resid_reg_mean"], c_res, "vs own other half (group pattern removed)"))
 
     fig, ax = ps.plt.subplots(figsize=(ps.HALF, 2.9))
-    if cur_off is not None:                       # GSR off, thin cool lines (robustness overlay)
+    if cur_off is not None:                       # GSR off: thin dashed reference lines
         for key, _, _color, _lab in keys:
-            ax.plot(*seg(cur_off[key + "_mean"]), "-", color=ps.COOL, lw=0.9, alpha=0.8)
-        ax.plot([], [], "-", color=ps.COOL, lw=0.9, label="global signal kept (GSR off)")
+            ax.plot(*seg(cur_off[key + "_mean"]), "--", color=ps.COOL, lw=0.9, alpha=0.9)
+        ax.plot([], [], "--", color=ps.COOL, lw=0.9, label="global signal kept (GSR off)")
     for key, mean, color, label in keys:
         lo, up = _bootstrap_band(cur["per"][key], cur["subs"])
         ax.fill_between(mins, lo, up, where=full & np.isfinite(lo) & np.isfinite(up),
