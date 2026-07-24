@@ -533,6 +533,7 @@ def stage_analyze(subjects, run_svm: bool = False) -> None:
     _write_curves_csv(cur, n_sub, curves_csv)
     print(f"\ncsv -> {curves_csv}")
     _analysis_figure(cur, n_sub)
+    _sampling_figure(cur, n_sub)          # x-axis check: first vs random X min
 
     if n_sub >= 2:
         nb = network_breakdown(cur, mins)
@@ -574,6 +575,78 @@ def _analysis_figure(cur, n_sub) -> None:
     out = config.FC_RESULTS_DIR / "curves.png"
     fig.savefig(out, dpi=120); plt.close(fig)
     print(f"figure -> {out}")
+
+
+def _random_curves(cur, seed: int = 0) -> dict:
+    """Per-subject r_self / nearest / signal when the growing X minutes are sampled RANDOMLY
+    across the whole first half (every rung spans all sessions), instead of the first X min
+    (one session early, many late). Same reference. Seeded, so the output is reproducible.
+    """
+    subs, first_half, ref_edges = cur["subs"], cur["first_half"], cur["ref_edges"]
+    rng = np.random.default_rng(seed)
+    per = {k: {s: np.full(len(LADDER), np.nan) for s in subs} for k in ("r_self", "near", "signal")}
+    for sid in subs:
+        a = first_half[sid]
+        for i, m in enumerate(LADDER):
+            n = int(round(m * 60.0 / TR))
+            if not (MIN_TP <= n <= a.shape[0]):
+                continue
+            grow = fc_edges(a[rng.choice(a.shape[0], n, replace=False)])
+            rs = _corr(grow, ref_edges[sid])
+            per["r_self"][sid][i] = rs
+            cross = [_corr(grow, ref_edges[b]) for b in subs if b != sid]
+            if cross:
+                near = max(cross)
+                per["near"][sid][i] = near
+                per["signal"][sid][i] = rs - near
+    return per
+
+
+def _sampling_figure(cur, n_sub) -> None:
+    """Confound check for the x-axis: first X min (contiguous) vs random X min (spread across
+    sessions). If the two agree the axis is amount-of-data; if they split at low X it is partly
+    session-span. `cur['per']` already holds the first-X-min per-subject curves."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    modes = {"first": cur["per"], "random": _random_curves(cur)}
+    mins, npr = cur["minutes"], cur["n"]
+    full = npr == n_sub
+    fi = np.where(full)[0]
+    hi = float(mins[fi[-1]]) if len(fi) else float(mins[-1])
+    seg = lambda y: (np.where(full, mins, np.nan), np.where(full, y, np.nan))
+    cmean = lambda per, k: _colmean(np.vstack([per[k][s] for s in cur["subs"]]))
+    style = {"first": "-", "random": "--"}
+
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    for name, per in modes.items():
+        ax.plot(*seg(cmean(per, "r_self")), style[name], color="C0", lw=2, marker="o",
+                ms=4, label=f"r_self ({name} X min)")
+        ax.plot(*seg(cmean(per, "signal")), style[name], color="C2", lw=2, marker="s",
+                ms=4, label=f"signal ({name} X min)")
+    ax.set(xlabel="minutes of rest (linear)", ylabel="FC edge correlation (r)",
+           title=f"x-axis check: first vs random X min (n={n_sub}, to {hi:.0f} min)",
+           xlim=(0, hi))
+    ax.legend(fontsize=8, loc="center right")
+    fig.tight_layout()
+    out = config.FC_RESULTS_DIR / "sampling.png"
+    fig.savefig(out, dpi=120); plt.close(fig)
+    print(f"figure -> {out}")
+
+    import csv
+    cell = lambda x: f"{x:.6f}" if np.isfinite(x) else ""
+    path = config.FC_RESULTS_DIR / "sampling.csv"
+    with open(path, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["subject", "minutes", "sample", "n", "r_self", "nearest", "signal"])
+        for name, per in modes.items():
+            for s in cur["subs"]:
+                for i, m in enumerate(mins):
+                    if not np.isfinite(per["r_self"][s][i]):
+                        continue
+                    w.writerow([s, m, name, int(npr[i]), cell(per["r_self"][s][i]),
+                                cell(per["near"][s][i]), cell(per["signal"][s][i])])
+    print(f"csv -> {path}")
 
 
 def _network_figure(cur, nb, target_min) -> None:

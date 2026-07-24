@@ -134,6 +134,12 @@ survives changes to the metric it came from; a CSV doesn't). It prints the subje
 - `curves.png` — one panel: r_self and the nearest impostor, the individual signal shaded
   between them (the shaded gap *is* the signal, so it isn't plotted twice), a thin line per
   subject behind each, x capped at the last rung every subject reaches (n=10, 45 min).
+- `sampling.png` / `sampling.csv` — x-axis confound check. The growing sample is normally the
+  **first** X minutes, so early rungs are one session and late rungs span many — which mixes
+  "more data" with "more sessions." This overlays r_self and signal for first-X-min against
+  **random** X min sampled across the whole first half (every rung spans all sessions; seeded,
+  reproducible). Curves that agree mean the axis is amount-of-data; a split at low X means it
+  is partly session-span.
 - `networks.png` — the mean reference FC with the 400 parcels **sorted by Yeo-17 network**
   (blocks line up with named systems) beside the 17×17 signal-per-block matrix at the last
   full-cohort rung.
