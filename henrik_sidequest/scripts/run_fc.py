@@ -647,11 +647,11 @@ def _analysis_figure(cur, n_sub) -> None:
         ax.fill_between(mins, lo, up, where=full & np.isfinite(lo) & np.isfinite(up),
                         color=color, alpha=0.20, lw=0)
     ax.plot(*seg(rs), "o-", color=c_self, lw=1.4, ms=3, label="vs own other half")
-    ax.plot(*seg(near), "s-", color=c_near, lw=1.4, ms=3, label="nearest stranger")
+    ax.plot(*seg(near), "s-", color=c_near, lw=1.4, ms=3, label="nearest other subject")
     ax.set(xlabel="minutes of rest", ylabel="correlation between maps", xlim=(0, hi))
     ps.style_ax(ax)
     ps.legend(ax, loc="lower right")
-    ps.titles(fig, "Own half vs the nearest stranger",
+    ps.titles(fig, "Own half vs the nearest other subject",
               f"$N$ = {n_sub} people  |  1–{hi:.0f} min  |  shaded: 95% CI (1000 bootstraps)")
     config.FC_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'curves')}")
