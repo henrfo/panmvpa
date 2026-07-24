@@ -707,9 +707,10 @@ def _sampling_figure(cur, n_sub) -> None:
     scatter vs block separates effective-DOF from session diversity: if the scatter gap collapses
     onto block it was DOF; if block still sits well above first, it's sessions."""
     ps.apply()
+    # Legend order (top -> bottom): first minutes, 1-min chunks, scattered timepoints.
     modes = {"first": cur["per"],
-             "scatter": _resampled_curves(cur, _draw_scatter),
-             "block": _resampled_curves(cur, _draw_block)}
+             "block": _resampled_curves(cur, _draw_block),
+             "scatter": _resampled_curves(cur, _draw_scatter)}
     mins, full, hi, seg = _fig_range(cur, n_sub)
     cmean = lambda per, k: _colmean(np.vstack([per[k][s] for s in cur["subs"]]))
     style = {"first": (ps.SUNSET(0.30), "o-"), "scatter": (ps.SUNSET(0.55), "^--"),
