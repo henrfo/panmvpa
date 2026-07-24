@@ -52,7 +52,7 @@ GREY = "#999999"               # de-emphasised series
 INK, SUBINK, PANEL = "#111111", "#555555", "#222222"
 SPINE, TICKINK = "#cccccc", "#333333"
 
-SAVE_KW = dict(bbox_inches="tight", pad_inches=0.01, facecolor="white")
+SAVE_KW = dict(bbox_inches="tight", pad_inches=0.08, facecolor="white")
 
 
 def apply() -> None:

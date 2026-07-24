@@ -26,7 +26,8 @@ rather than setting anything per-figure.
 
 - **PDF for the paper, PNG for viewing on the hub.** Both are written for every figure. PDF is
   vector — text stays sharp at any zoom, smaller file size.
-- Save with: `bbox_inches="tight", pad_inches=0.01, facecolor="white"`.
+- Save with: `bbox_inches="tight", pad_inches=0.08, facecolor="white"` (a small margin so long
+  rotated tick labels aren't trimmed flush to the edge).
 - These are collected in a `SAVE_KW` dict and unpacked at every `savefig` call.
 
 ## Fonts
