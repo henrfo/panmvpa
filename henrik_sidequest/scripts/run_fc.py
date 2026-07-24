@@ -729,20 +729,23 @@ def _sampling_figure(cur, n_sub) -> None:
     axes[0].set_ylabel("correlation between maps")
     ps.legend(axes[0], loc="lower right")
 
-    # Factual block result: is block (session spread + autocorrelation) closer to scatter or to
-    # first, over the low-data rungs where they separate? That decides sessions vs sample count.
-    lowx = full & (np.array(mins) <= min(10.0, hi))
+    # Factual block result: chunks share scattered's session spread and first's continuity, so
+    # where they land relative to the two says which factor is acting. They coincide with first
+    # at 1 min by construction, so only rungs >=3 min are informative.
+    mid = full & (np.array(mins) >= 3) & (np.array(mins) <= hi)
     b, s, f = (cmean(modes["block"], "r_self"), cmean(modes["scatter"], "r_self"),
                cmean(modes["first"], "r_self"))
-    d_scatter = float(np.nanmean(np.abs(b - s)[lowx]))
-    d_first = float(np.nanmean(np.abs(b - f)[lowx]))
-    verdict = ("1-min chunks track scattered, not first minutes — same session spread as "
-               "scattered, same continuity as first: the gap is session variety"
-               if d_scatter < d_first else
-               "1-min chunks track first minutes, not scattered — the gap is number of "
-               "independent samples, not session variety")
+    lo, up = np.minimum(f, s), np.maximum(f, s)
+    frac_between = float(np.nanmean(((b >= lo - 1e-9) & (b <= up + 1e-9))[mid])) if mid.any() else 0.0
+    verdict = ("1-min chunks fall between first minutes and scattered at every rung, so both "
+               "session variety and number of independent samples contribute"
+               if frac_between >= 0.6 else
+               "1-min chunks track scattered — session variety dominates"
+               if np.nanmean(np.abs(b - s)[mid]) < np.nanmean(np.abs(b - f)[mid]) else
+               "1-min chunks track first minutes — sample count dominates")
     ps.titles(fig, "Which minutes you use, and how they are spread across sessions",
-              f"{verdict}  |  $N$ = {n_sub}  |  seed 0", top=0.82)
+              f"{verdict} (chunks meet first minutes at 1 min; compare from 3 min)  |  $N$ = {n_sub}",
+              top=0.82)
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'sampling')}")
 
     import csv
@@ -797,9 +800,10 @@ def _network_figure(cur, nb, target_min) -> None:
         ax[0].axhline(b - 0.5, color="#888888", lw=0.3); ax[0].axvline(b - 0.5, color="#888888", lw=0.3)
     for a in ax:
         a.tick_params(length=0)
-    ax[0].set_xticks(centers); ax[0].set_xticklabels(full_names, rotation=90, fontsize=ps.FS["tick"] - 1)
-    ax[0].set_yticks(centers); ax[0].set_yticklabels(full_names, fontsize=ps.FS["tick"] - 1)
-    ps.panel(ax[0], 0, "average connectivity, grouped by brain system")
+    # Small systems have block centres only a few parcels apart, so 17 labels here collide.
+    # The boundary lines carry the grouping; the labels live on panel (b), same order.
+    ax[0].set_xticks([]); ax[0].set_yticks([])
+    ps.panel(ax[0], 0, "average connectivity, grouped by system (order as in b)")
     ps.colorbar(fig, im0, ax[0])
 
     im1 = ax[1].imshow(S, cmap=ps.SUNSET)
@@ -828,24 +832,24 @@ def _nettraj_figure(cur, nb, n_sub) -> None:
             acc[nm][r["minutes"]].append(r["r_resid_reg"])
     traj = {nm: np.array([np.mean(acc[nm][m]) if acc[nm][m] else np.nan for m in ms]) for nm in names}
     final = {nm: (traj[nm][-1] if len(ms) else np.nan) for nm in names}
-    ranked = sorted((nm for nm in names if np.isfinite(final[nm])), key=lambda nm: final[nm])
-    named = list(reversed(ranked[-2:])) + ranked[:2]   # top 2 then bottom 2, for the legend
+    order = sorted(names, key=lambda nm: (-final[nm] if np.isfinite(final[nm]) else np.inf))
     assoc_names = [nm for nm in names if nm in assoc]
     col = dict(zip(assoc_names, ps.sunset_colors(len(assoc_names))))
+    line_color = lambda nm: col.get(nm, ps.GREY)
 
     from matplotlib.lines import Line2D
-    fig, ax = ps.plt.subplots(figsize=(ps.FULL * 0.62, 3.0))
+    fig, ax = ps.plt.subplots(figsize=(ps.FULL * 0.66, 3.4))
     for nm in names:                            # sensory / other: grey background
         if nm not in assoc:
             ax.plot(ms, traj[nm], color=ps.GREY, lw=0.8, alpha=0.55)
     for nm in assoc_names:                       # association: warm palette
         ax.plot(ms, traj[nm], color=col[nm], lw=1.3)
-    # Only the extreme few named, in a legend OUTSIDE the axes (right) so nothing collides.
-    handles = [Line2D([], [], color=col.get(nm, ps.GREY), lw=1.6, label=config.network_label(nm))
-               for nm in named]
+    # All 17 named, ranked high->low, in a legend OUTSIDE the axes (room now, nothing collides).
+    handles = [Line2D([], [], color=line_color(nm), lw=1.6, label=config.network_label(nm))
+               for nm in order]
     ax.legend(handles=handles, loc="center left", bbox_to_anchor=(1.02, 0.5),
               frameon=False, fontsize=ps.FS["legend"], labelcolor=ps.TICKINK,
-              title="highest / lowest", title_fontsize=ps.FS["legend"])
+              title="systems, high → low", title_fontsize=ps.FS["legend"])
     ax.set(xlabel="minutes of rest", ylabel="match to own map (group removed)", xlim=(0, hi))
     ps.style_ax(ax)
     ps.titles(fig, "Individuality by brain system",
