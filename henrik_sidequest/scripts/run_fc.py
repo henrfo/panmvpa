@@ -656,11 +656,33 @@ def _residual_figure(cur, n_sub) -> None:
     print(f"figure -> {out}")
 
 
-def _random_curves(cur, seed: int = 0) -> dict:
-    """Per-subject r_self / nearest / signal when the growing X minutes are sampled RANDOMLY
-    across the whole first half (every rung spans all sessions), instead of the first X min
-    (one session early, many late). Same reference. Seeded, so the output is reproducible.
-    """
+def _draw_scatter(T: int, n: int, rng) -> np.ndarray:
+    """n individual timepoints scattered across the half. Breaks temporal autocorrelation, so
+    with the 0.08 Hz low-pass each is ~independent -- inflates effective DOF."""
+    return rng.choice(T, n, replace=False)
+
+
+def _draw_block(T: int, n: int, rng, block: int = 0) -> np.ndarray:
+    """n timepoints as contiguous ~1-min chunks from random (non-overlapping) positions across
+    the half. Same session spread as scatter, but autocorrelation is preserved WITHIN each chunk
+    -- so effective DOF matches the first-X-min curve. If the gap survives this, it's sessions."""
+    block = block or max(1, int(round(60.0 / TR)))
+    n_tiles = T // block
+    if n_tiles < 1:
+        return _draw_scatter(T, n, rng)
+    starts = np.arange(n_tiles) * block
+    rng.shuffle(starts)
+    idx: list[int] = []
+    for s in starts:
+        idx.extend(range(int(s), int(s) + block))
+        if len(idx) >= n:
+            break
+    return np.array(idx[:n], dtype=int)
+
+
+def _resampled_curves(cur, draw, seed: int = 0) -> dict:
+    """Per-subject r_self / nearest / signal when the growing X minutes are drawn by `draw`
+    instead of taken from the front. Same reference. Seeded, so the output is reproducible."""
     subs, first_half, ref_edges = cur["subs"], cur["first_half"], cur["ref_edges"]
     rng = np.random.default_rng(seed)
     per = {k: {s: np.full(len(LADDER), np.nan) for s in subs} for k in ("r_self", "near", "signal")}
@@ -670,7 +692,7 @@ def _random_curves(cur, seed: int = 0) -> dict:
             n = int(round(m * 60.0 / TR))
             if not (MIN_TP <= n <= a.shape[0]):
                 continue
-            grow = fc_edges(a[rng.choice(a.shape[0], n, replace=False)])
+            grow = fc_edges(a[draw(a.shape[0], n, rng)])
             rs = _corr(grow, ref_edges[sid])
             per["r_self"][sid][i] = rs
             cross = [_corr(grow, ref_edges[b]) for b in subs if b != sid]
@@ -682,31 +704,37 @@ def _random_curves(cur, seed: int = 0) -> dict:
 
 
 def _sampling_figure(cur, n_sub) -> None:
-    """Confound check for the x-axis: first X min (contiguous) vs random X min (spread across
-    sessions). If the two agree the axis is amount-of-data; if they split at low X it is partly
-    session-span. `cur['per']` already holds the first-X-min per-subject curves."""
+    """x-axis check, three ways of drawing X minutes from the first half:
+        first   -- the opening X min (one session early, many late) -- what you can collect
+        scatter -- X individual timepoints across the half (breaks autocorrelation -> high DOF)
+        block   -- X min as ~1-min contiguous chunks from random positions (session spread with
+                   autocorrelation preserved)
+    scatter vs block separates effective-DOF from session diversity: if the scatter gap collapses
+    onto block it was DOF; if block still sits well above first, it's sessions."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    modes = {"first": cur["per"], "random": _random_curves(cur)}
+    modes = {"first": cur["per"],
+             "scatter": _resampled_curves(cur, _draw_scatter),
+             "block": _resampled_curves(cur, _draw_block)}
     mins, npr = cur["minutes"], cur["n"]
     full = npr == n_sub
     fi = np.where(full)[0]
     hi = float(mins[fi[-1]]) if len(fi) else float(mins[-1])
     seg = lambda y: (np.where(full, mins, np.nan), np.where(full, y, np.nan))
     cmean = lambda per, k: _colmean(np.vstack([per[k][s] for s in cur["subs"]]))
-    style = {"first": "-", "random": "--"}
+    style = {"first": ("C0", "o-"), "scatter": ("C1", "^--"), "block": ("C2", "s-.")}
+    label = {"first": "first X min", "scatter": "random scattered TRs",
+             "block": "random 1-min blocks"}
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
     for name, per in modes.items():
-        ax.plot(*seg(cmean(per, "r_self")), style[name], color="C0", lw=2, marker="o",
-                ms=4, label=f"r_self ({name} X min)")
-        ax.plot(*seg(cmean(per, "signal")), style[name], color="C2", lw=2, marker="s",
-                ms=4, label=f"signal ({name} X min)")
-    ax.set(xlabel="minutes of rest (linear)", ylabel="FC edge correlation (r)",
-           title=f"x-axis check: first vs random X min (n={n_sub}, to {hi:.0f} min)",
+        c, ls = style[name]
+        ax.plot(*seg(cmean(per, "r_self")), ls, color=c, lw=2, ms=4, label=f"r_self ({label[name]})")
+    ax.set(xlabel="minutes of rest (linear)", ylabel="r_self (FC edge correlation)",
+           title=f"first vs random-scatter vs random-block (n={n_sub}, to {hi:.0f} min)",
            xlim=(0, hi))
-    ax.legend(fontsize=8, loc="center right")
+    ax.legend(fontsize=8, loc="lower right")
     fig.tight_layout()
     out = config.FC_RESULTS_DIR / "sampling.png"
     fig.savefig(out, dpi=120); plt.close(fig)

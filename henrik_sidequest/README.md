@@ -154,13 +154,15 @@ survives changes to the metric it came from; a CSV doesn't). It prints the subje
 - `curves.png` — one panel: r_self and the nearest impostor, the individual signal shaded
   between them (the shaded gap *is* the signal, so it isn't plotted twice), a thin line per
   subject behind each, x capped at the last rung every subject reaches (n=10, 45 min).
-- `sampling.png` / `sampling.csv` — **first** X minutes vs **random** X minutes (sampled across
-  the whole first half; seeded, reproducible), for r_self and signal. These answer *different*
-  questions and both are reported: first-minutes is what you can actually collect (start
-  scanning now and you get exactly this); random holds session-diversity at maximum, which no
-  one can buy without running the sessions. The **gap between them** is the result — how much of
-  early unreliability is "not enough data" vs "only one day sampled." A separate question from
-  the residual analysis above.
+- `sampling.png` / `sampling.csv` — three ways of drawing the X minutes (r_self; seeded):
+  **first** (the opening X min — what you can actually collect), **scatter** (X individual
+  timepoints across the half), **block** (X min as ~1-min contiguous chunks from random
+  positions). This separates two confounds: scatter breaks temporal autocorrelation, so under
+  the 0.08 Hz low-pass each TR is ~independent and effective DOF is inflated; block has the same
+  session spread but preserves autocorrelation. If the scatter gap **collapses onto block**, it
+  was DOF; if **block stays well above first**, it is session diversity. (first vs block is the
+  session question; first vs scatter mixes sessions with DOF and shouldn't be read alone.) A
+  separate question from the residual analysis above.
 - `networks.png` — the mean reference FC with the 400 parcels **sorted by Yeo-17 network**
   (blocks line up with named systems) beside the 17×17 signal-per-block matrix at the last
   full-cohort rung.
