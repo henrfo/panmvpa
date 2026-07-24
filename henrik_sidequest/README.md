@@ -111,44 +111,36 @@ against every subject's full reference half:
 - **hit rate** — was r_self the top match of all subjects? Reported, but it ceilings like the
   SVM, so it isn't the headline.
 
-Everything past the rung every subject reaches (the n<10 tail — at 80 min a single subject
-with the most rest) is **de-emphasised**: slopes and the 90%-of-final normalisation are
-computed over the full-cohort range only, and the plot greys those rungs so the highest point
-on the chart isn't one person. Headline numbers over that range: the **crossover** (own-data
-minutes until r_self beats a stranger's stable map), and minutes to **90%** of r_self
-(reliability) and of the signal (distinctiveness) **separately** — normalised to each curve's
-value at the last full-cohort rung. That value is **not a fitted asymptote**: the output
-states the terminal slope and whether either curve has actually plateaued there (on this
-cohort neither has by 45 min, so the minute grows with more rest).
-
-Both the mean *and* **per subject**: the 90% minute for r_self and for signal is printed for
-every subject with the spread across the cohort. Whether reliability and distinctiveness
-co-saturate is a within-subject question, and a mean minutes-recommendation is only real if
-the spread is tight — otherwise it is averaging a 15-min subject with a 60-min one.
+The n<10 tail (at 80 min, a single subject with the most rest) is **de-emphasised** in the
+figure — bold only over the full-cohort rungs, the sparse tail greyed — so the highest point
+on the chart isn't one person.
 
 - **SVM (second method)** — one example = *X* minutes labelled by subject; grow *X*, retrain,
   record the **margin**. Held out by **whole session**, never random minutes; examples
-  session-disjoint. Kept for comparison but not the headline: accuracy pins at 1.0 with this
-  cohort, and an example eats *X* minutes so it dies past ~40 min when each subject has one
-  example to hold out. A **connectivity-free control** (per-parcel temporal mean/SD) tests how
-  much identity is anatomy rather than covariance.
+  session-disjoint. An example eats *X* minutes, so it stops past ~40 min when each subject has
+  one example to hold out. A **connectivity-free control** (per-parcel temporal mean/SD) is
+  scored alongside it.
 
-`curves.png` is two panels on a shared linear x, a thin line per subject behind every bold
-mean and the n<10 tail greyed: **top** r_self and the group floor with the gap shaded (nearest
-impostor a thin reference line); **bottom** the individual signal. Accuracy and the SVM margin
-are dropped from the figure (the SVM stays in the text tables).
+**`analyze` prints numbers and writes files — no prose conclusions** (a conclusion in prose
+survives changes to the metric it came from; a CSV doesn't). It prints the subject-mean table
+(r_self / nearest / floor / signal / hit%) and the SVM table, and writes:
 
-**Network-level breakdown.** Schaefer-400 parcels carry Yeo-17 labels in the atlas metadata,
-so the edge vector splits by network pair. At the last full-cohort rung, r_self / nearest /
-signal are computed per network block, and the output ranks which systems carry the individual
-signal and which are generic (per-system and top/bottom blocks). `networks.png` shows the mean
-reference FC with the 400 parcels **sorted by network** (blocks line up with named systems
-instead of being unreadable) beside the 17×17 signal-per-block matrix.
+- `curves.csv` — long format, one row per (subject, minutes): `subject, minutes, n, r_self,
+  nearest, floor, signal`. The **per-subject** curves behind the means; 90% minutes, slopes,
+  crossover are all computed from this in a notebook.
+- `networks.csv` — long format per network block: `network_a, network_b, minutes, r_self,
+  nearest, signal` (subject-mean per Yeo-17 pair, every rung).
+- `curves.png` — two panels, shared linear x, thin line per subject behind each bold mean, tail
+  greyed: **top** r_self and the group floor with the gap shaded (nearest impostor a thin
+  reference); **bottom** the individual signal.
+- `networks.png` — the mean reference FC with the 400 parcels **sorted by Yeo-17 network**
+  (blocks line up with named systems) beside the 17×17 signal-per-block matrix at the last
+  full-cohort rung.
 
 ```bash
 python scripts/run_fc.py inspect --subjects PAN01           # reduce ONE run, look, delete nothing
 python scripts/run_fc.py reduce  --subjects PAN01 --cleanup # reduce all rest, then drop the BOLD
-python scripts/run_fc.py analyze                            # within/between/gap + SVM (needs the cohort)
+python scripts/run_fc.py analyze                            # print tables, write CSVs + figures
 ```
 
 `inspect` first: deletion is the only irreversible step, and `--cleanup` skips any run whose

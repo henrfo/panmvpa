@@ -318,10 +318,10 @@ def _parcel_networks() -> tuple[np.ndarray, list[str]]:
     return nets, order
 
 
-def network_breakdown(cur: dict, target_min: float) -> dict:
-    """Split the FC edge vector by Yeo-17 network pair and, at `target_min`, compute r_self /
-    nearest / signal per block -- which systems carry the individual signal, which are generic.
-    Reuses the cleaned first halves and reference edges from identity_curves (no re-cleaning).
+def network_breakdown(cur: dict, minutes_list) -> dict:
+    """Split the FC edge vector by Yeo-17 network pair and compute the subject-mean r_self /
+    nearest / signal per block at every rung in `minutes_list`. Reuses the cleaned first halves
+    and reference edges from identity_curves (no re-cleaning). Returns long-format rows.
     """
     subs, first_half, ref_edges = cur["subs"], cur["first_half"], cur["ref_edges"]
     nets, names = _parcel_networks()
@@ -332,75 +332,52 @@ def network_breakdown(cur: dict, target_min: float) -> dict:
                  for p in range(K) for q in range(p, K)}
     block_idx = {k: v for k, v in block_idx.items() if v.size >= 3}
 
-    n = int(round(target_min * 60.0 / TR))
-    grow = {s: fc_edges(first_half[s][:n]) for s in subs
-            if MIN_TP <= n <= first_half[s].shape[0]}
-    valid = list(grow)
-    blocks = []
-    for (p, q), idx in block_idx.items():
-        rs_l, nr_l, sg_l = [], [], []
-        for s in valid:
-            gb, sb = grow[s][idx], ref_edges[s][idx]
-            rs = _corr(gb, sb)
-            others = [_corr(gb, ref_edges[b][idx]) for b in valid if b != s]
-            if not others:
-                continue
-            near = max(others)
-            rs_l.append(rs); nr_l.append(near); sg_l.append(rs - near)
-        if rs_l:
-            blocks.append({"p": p, "q": q, "pair": (names[p], names[q]), "edges": idx.size,
-                           "r_self": float(np.mean(rs_l)), "near": float(np.mean(nr_l)),
-                           "signal": float(np.mean(sg_l))})
-
-    net_sig: dict[int, list[float]] = {k: [] for k in range(K)}
-    for b in blocks:
-        net_sig[b["p"]].append(b["signal"])
-        if b["q"] != b["p"]:
-            net_sig[b["q"]].append(b["signal"])
-    net_rank = sorted(((names[k], float(np.mean(v))) for k, v in net_sig.items() if v),
-                      key=lambda kv: -kv[1])
-    return {"blocks": blocks, "names": names, "nets": nets, "valid": valid,
-            "net_rank": net_rank, "target_min": target_min}
+    rows = []
+    for m in minutes_list:
+        n = int(round(m * 60.0 / TR))
+        grow = {s: fc_edges(first_half[s][:n]) for s in subs
+                if MIN_TP <= n <= first_half[s].shape[0]}
+        valid = list(grow)
+        if len(valid) < 2:                       # need >=2 for a nearest impostor
+            continue
+        for (p, q), idx in block_idx.items():
+            rs_l, nr_l, sg_l = [], [], []
+            for s in valid:
+                gb, sb = grow[s][idx], ref_edges[s][idx]
+                rs = _corr(gb, sb)
+                near = max(_corr(gb, ref_edges[b][idx]) for b in valid if b != s)
+                rs_l.append(rs); nr_l.append(near); sg_l.append(rs - near)
+            rows.append({"a": names[p], "b": names[q], "minutes": float(m), "n": len(valid),
+                         "r_self": float(np.mean(rs_l)), "nearest": float(np.mean(nr_l)),
+                         "signal": float(np.mean(sg_l))})
+    return {"rows": rows, "names": names, "nets": nets}
 
 
-def _slope(minutes: np.ndarray, values: np.ndarray, lo: float, hi: float) -> float:
-    """Linear-axis slope (per minute) of a curve over [lo, hi]. The plot is linear, so the
-    slope is too -- an earlier ratio computed on a log axis under a linear plot was wrong."""
-    m = np.isfinite(values) & (minutes >= lo) & (minutes <= hi)
-    return float(np.polyfit(minutes[m], values[m], 1)[0]) if m.sum() >= 2 else float("nan")
+def _write_curves_csv(cur, n_sub, path) -> None:
+    """Long format, one row per (subject, minutes): the per-subject curves behind the means."""
+    import csv
+    mins, npr = cur["minutes"], cur["n"]
+    cell = lambda x: f"{x:.6f}" if np.isfinite(x) else ""
+    with open(path, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["subject", "minutes", "n", "r_self", "nearest", "floor", "signal"])
+        for s in cur["subs"]:
+            for i, m in enumerate(mins):
+                rself = cur["per"]["r_self"][s][i]
+                if not np.isfinite(rself):
+                    continue
+                w.writerow([s, m, int(npr[i]), cell(rself), cell(cur["per"]["near"][s][i]),
+                            cell(cur["per"]["floor"][s][i]), cell(cur["per"]["signal"][s][i])])
 
 
-def _reaches(minutes: np.ndarray, values: np.ndarray, target: float) -> float:
-    """First minute at which `values` rises through `target`, linearly interpolated between
-    the bracketing rungs. No fitted asymptote, no assumed functional form."""
-    for i in range(1, len(minutes)):
-        a, b = values[i - 1], values[i]
-        if np.isfinite(a) and np.isfinite(b) and a < target <= b:
-            frac = (target - a) / (b - a) if b != a else 0.0
-            return float(minutes[i - 1] + frac * (minutes[i] - minutes[i - 1]))
-    return float("nan")
-
-
-def _final(minutes: np.ndarray, values: np.ndarray) -> tuple[float, float]:
-    """(value, minute) at the largest rung that has data -- each curve's own maximum-data
-    value, used to normalise the 90% times (rather than a fitted asymptote)."""
-    fin = np.where(np.isfinite(values))[0]
-    return (float(values[fin[-1]]), float(minutes[fin[-1]])) if len(fin) else (float("nan"), float("nan"))
-
-
-def _saturation_verdict(t_signal: float, t_reliability: float, tol: float = 2.0) -> str | None:
-    """Which saturates first, DISTINCTIVENESS (signal) or RELIABILITY (r_self) -- read off the
-    signal directly, so the conclusion follows the data. (An earlier version compared reliability
-    to headroom, whose moving denominator can rise while the signal falls; on the honest signal
-    the direction can reverse, so this must never be a fixed claim.)"""
-    if not (np.isfinite(t_signal) and np.isfinite(t_reliability)):
-        return None
-    d = t_signal - t_reliability
-    if abs(d) <= tol:
-        return "distinctiveness and reliability saturate together"
-    if d < 0:
-        return "distinctiveness (signal) saturates BEFORE reliability"
-    return "distinctiveness (signal) keeps accruing AFTER reliability flattens"
+def _write_network_csv(rows, path) -> None:
+    import csv
+    with open(path, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["network_a", "network_b", "minutes", "r_self", "nearest", "signal"])
+        for r in rows:
+            w.writerow([r["a"], r["b"], r["minutes"],
+                        f"{r['r_self']:.6f}", f"{r['nearest']:.6f}", f"{r['signal']:.6f}"])
 
 
 # SVM ladder is separate from the overlap ladder and capped: an example eats X minutes, so
@@ -524,30 +501,21 @@ def stage_analyze(subjects) -> None:
     fi = np.where(full)[0]
     hi_full = float(mins[fi[-1]]) if len(fi) else float("nan")
 
-    print("\nidentification (nearest-neighbour, no held-out examples — runs the full ladder):")
+    print("\nr_self / nearest / floor / signal, mean over subjects:")
     print("  min   n   r_self  nearest   floor   signal   hit%")
     for i, m in enumerate(mins):
         if npr[i] == 0:
             continue
-        tail = "" if full[i] else "  <- n<%d" % n_sub
+        tail = "" if full[i] else "  n<%d" % n_sub
         if np.isfinite(near[i]):
             print(f"  {m:4.1f}  {npr[i]:2d}   {rs[i]:.3f}   {near[i]:.3f}   {floor[i]:.3f}   "
                   f"{sig[i]:+.3f}   {hit[i]*100:3.0f}%{tail}")
         else:
             print(f"  {m:4.1f}  {npr[i]:2d}   {rs[i]:.3f}     --       --       --      --{tail}")
 
-    # r_self accrues against a rising floor: both slopes + ratio, over the full-cohort range.
-    if len(fi) >= 2:
-        lo = float(mins[fi[0]])
-        sw, sb = _slope(mins, rs, lo, hi_full), _slope(mins, floor, lo, hi_full)
-        ratio = sw / sb if np.isfinite(sb) and sb != 0 else float("nan")
-        print(f"\nslope over [{lo:.0f}, {hi_full:.0f}] min (n={n_sub} throughout, linear axis):")
-        print(f"  r_self {sw:+.4f}   floor {sb:+.4f}   ratio {ratio:.2f}x "
-              f"(reliability accrues {ratio:.2f}x the group floor)")
-
     table = identify_table(sess, gsr=True)
-    print(f"\nSVM (second method; ceilings & dies at 40 min — chance={1.0/n_sub:.2f}):")
-    print("  min  examples  used   FC acc / margin    structural acc / margin (control)")
+    print(f"\nSVM leave-one-session-out (chance={1.0/n_sub:.2f}):")
+    print("  min  examples  used   FC acc / margin    structural acc / margin")
     for r in table:
         used = f"{r['used_frac']:.0%}"
         if "acc_fc" in r:
@@ -555,99 +523,22 @@ def stage_analyze(subjects) -> None:
                   f"{r['acc_fc']:.2f} / {r['margin_fc']:+.2f}     "
                   f"{r['acc_st']:.2f} / {r['margin_st']:+.2f}")
         else:
-            why = "need >=2 subjects" if n_sub < 2 else f"only {r['per_sub']} example(s)/subj — too few"
-            print(f"  {r['min']:4.1f}  {r['n']:3d}          {used:>4}  ({why})")
+            print(f"  {r['min']:4.1f}  {r['n']:3d}          {used:>4}  ({r['per_sub']} example/subj)")
 
-    # 90% minute of a curve, normalised to its value at the last full-cohort rung (NOT the
-    # n<10 tail, NOT a fitted asymptote) and searched only within the full-cohort range.
-    fmt = lambda x: f"{x:.1f} min" if np.isfinite(x) else "n/a"
-    def t90(vv):
-        if not len(fi) or not np.isfinite(vv[fi[-1]]):
-            return float("nan")
-        target = 0.9 * float(vv[fi[-1]])
-        capped = np.where(full, vv, np.nan)
-        if capped[fi[0]] >= target:          # already at 90% by the first rung
-            return float(mins[fi[0]])
-        return _reaches(mins, capped, target)
-
-    self_fin = float(rs[fi[-1]]) if len(fi) else float("nan")
-    sig_fin = float(sig[fi[-1]]) if len(fi) else float("nan")
-    t_self, t_sig = t90(rs), t90(sig)
-    bfloor = float(floor[fi[-1]]) if len(fi) else float("nan")
-    crossover = _reaches(mins, rs, bfloor) if np.isfinite(bfloor) else float("nan")
-    hits = np.where((hit >= 1.0) & (npr >= 2))[0]
-    print(f"\nheadline (MEAN over n={n_sub}, to {hi_full:.0f} min):")
-    print(f"  crossover (r_self beats stable group floor {bfloor:.3f}): {fmt(crossover)}"
-          if np.isfinite(bfloor) else "  crossover: n/a (need >=2 subjects)")
-    if np.isfinite(self_fin):
-        print(f"  r_self (reliability)     to 90% of its {hi_full:.0f}-min value {self_fin:.3f}: {fmt(t_self)}")
-        print(f"  signal (distinctiveness) to 90% of its {hi_full:.0f}-min value {sig_fin:+.3f}: {fmt(t_sig)}")
-    verdict = _saturation_verdict(t_sig, t_self)
-    if verdict:
-        print(f"  -> {verdict} (signal 90% {fmt(t_sig)} vs r_self 90% {fmt(t_self)})")
-    if len(hits):
-        print(f"  nearest-neighbour hit rate reaches 100% at: {mins[hits[0]]:.1f} min (ceilings)")
-
-    # State plainly: this is anchored to the last full-cohort rung, not an asymptote, and
-    # whether the curves have actually plateaued there is read off the terminal slope.
-    if len(fi) >= 2:
-        es = _slope(mins, rs, float(mins[fi[-2]]), hi_full)
-        eg = _slope(mins, sig, float(mins[fi[-2]]), hi_full)
-        rise = lambda s: "still rising" if s > 1e-3 else ("flat" if abs(s) <= 1e-3 else "falling")
-        print(f"  NOTE: 'final' = the {hi_full:.0f}-min value (last full-cohort rung), NOT a fitted asymptote.")
-        status = (f"r_self {rise(es)} {es:+.4f}/min, signal {rise(eg)} {eg:+.4f}/min")
-        if es > 1e-3 or eg > 1e-3:
-            print(f"        Neither curve has plateaued by {hi_full:.0f} min ({status}); "
-                  f"the 90% minute would grow with more rest.")
-        else:
-            print(f"        Both curves have ~flattened by {hi_full:.0f} min ({status}).")
-
-    # Per subject, not just the mean: is a minutes recommendation real, or is the mean
-    # averaging someone who saturates at 15 min with someone at 60? Each subject to 90% of its
-    # OWN last-full-cohort-rung value, within the full-cohort range. (Curves are behind the mean.)
-    print(f"\nper-subject 90% minute (each vs its OWN {hi_full:.0f}-min value):")
-    print("  subject     r_self    signal")
-    ps_self, ps_sig = [], []
-    for s in cur["subs"]:
-        ts, tg = t90(cur["per"]["r_self"][s]), t90(cur["per"]["signal"][s])
-        ps_self.append(ts); ps_sig.append(tg)
-        print(f"  {s:9s} {fmt(ts):>9} {fmt(tg):>9}")
-
-    def spread(vals, label):
-        v = np.array([x for x in vals if np.isfinite(x)])
-        if not len(v):
-            print(f"  {label}: n/a"); return
-        print(f"  {label}: median {np.median(v):.1f} min, range {v.min():.1f}–{v.max():.1f} "
-              f"({v.max() - v.min():.1f} min spread across {len(v)} subjects)")
-    print()
-    spread(ps_self, "r_self 90%")
-    spread(ps_sig, "signal 90%")
-    # Directional within-subject median (signal − r_self), so it says which comes first, not
-    # just that they differ -- and it is the median OF PER-SUBJECT differences, not a difference
-    # of medians, so it reflects each subject compared to itself.
-    diffs = [g - s for s, g in zip(ps_self, ps_sig) if np.isfinite(s) and np.isfinite(g)]
-    if diffs:
-        med = float(np.median(diffs))
-        v = _saturation_verdict(med, 0.0)   # sign of (signal − r_self) is what matters
-        print(f"  within-subject: {v} (median signal−r_self = {med:+.1f} min "
-              f"across {len(diffs)} subjects)")
-
-    # Network-level breakdown at the last full-cohort rung: which Yeo-17 systems carry the
-    # individual signal, which are generic.
-    if len(fi) and n_sub >= 2:
-        nb = network_breakdown(cur, hi_full)
-        print(f"\nnetwork breakdown at {hi_full:.0f} min (Yeo-17, {len(nb['valid'])} subjects):")
-        print("  system carries individual signal (mean block signal, high → generic):")
-        for name, s in nb["net_rank"]:
-            print(f"    {name:14s} {s:+.3f}")
-        by_sig = sorted(nb["blocks"], key=lambda b: -b["signal"])
-        print("  most individual blocks:  " + ", ".join(
-            f"{b['pair'][0]}–{b['pair'][1]} {b['signal']:+.3f}" for b in by_sig[:4]))
-        print("  most generic blocks:     " + ", ".join(
-            f"{b['pair'][0]}–{b['pair'][1]} {b['signal']:+.3f}" for b in by_sig[-4:]))
-        _network_figure(cur, nb)
-
+    # Write data, not conclusions: long-format CSVs + figures to interpret in a notebook.
+    config.FC_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    curves_csv = config.FC_RESULTS_DIR / "curves.csv"
+    _write_curves_csv(cur, n_sub, curves_csv)
+    print(f"\ncsv -> {curves_csv}")
     _analysis_figure(cur, table, n_sub)
+
+    if n_sub >= 2:
+        nb = network_breakdown(cur, mins)
+        net_csv = config.FC_RESULTS_DIR / "networks.csv"
+        _write_network_csv(nb["rows"], net_csv)
+        print(f"csv -> {net_csv}")
+        if len(fi):
+            _network_figure(cur, nb, hi_full)
 
 
 def _analysis_figure(cur, table, n_sub) -> None:
@@ -705,9 +596,9 @@ def _analysis_figure(cur, table, n_sub) -> None:
     print(f"figure -> {out}")
 
 
-def _network_figure(cur, nb) -> None:
+def _network_figure(cur, nb, target_min) -> None:
     """Two panels: the mean reference FC with parcels sorted by Yeo-17 network (blocks line up
-    with named systems), and the 17x17 individual-signal-per-block matrix."""
+    with named systems), and the 17x17 individual-signal-per-block matrix at `target_min`."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -718,7 +609,7 @@ def _network_figure(cur, nb) -> None:
     bounds = np.cumsum(sizes)
     centers = bounds - np.array(sizes) / 2.0
 
-    mean_edges = np.mean(np.vstack([cur["ref_edges"][s] for s in nb["valid"]]), axis=0)
+    mean_edges = np.mean(np.vstack([cur["ref_edges"][s] for s in cur["subs"]]), axis=0)
     M = np.zeros((config.N_PARCELS, config.N_PARCELS))
     iu = np.triu_indices(config.N_PARCELS, k=1)
     M[iu] = mean_edges
@@ -726,9 +617,12 @@ def _network_figure(cur, nb) -> None:
     np.fill_diagonal(M, 1.0)
     Ms = M[np.ix_(order, order)]
 
+    idx = {name: k for k, name in enumerate(names)}
     S = np.full((K, K), np.nan)
-    for b in nb["blocks"]:
-        S[b["p"], b["q"]] = S[b["q"], b["p"]] = b["signal"]
+    for r in nb["rows"]:
+        if r["minutes"] == target_min:
+            p, q = idx[r["a"]], idx[r["b"]]
+            S[p, q] = S[q, p] = r["signal"]
 
     fig, ax = plt.subplots(1, 2, figsize=(15, 7))
     im0 = ax[0].imshow(Ms, cmap="RdBu_r", vmin=-0.5, vmax=0.5)
@@ -742,7 +636,7 @@ def _network_figure(cur, nb) -> None:
     im1 = ax[1].imshow(S, cmap="viridis")
     ax[1].set_xticks(range(K)); ax[1].set_xticklabels(names, rotation=90, fontsize=7)
     ax[1].set_yticks(range(K)); ax[1].set_yticklabels(names, fontsize=7)
-    ax[1].set_title(f"Individual signal per network block @ {nb['target_min']:.0f} min")
+    ax[1].set_title(f"signal per network block @ {target_min:.0f} min")
     fig.colorbar(im1, ax=ax[1], fraction=0.046)
     fig.tight_layout()
     out = config.FC_RESULTS_DIR / "networks.png"
