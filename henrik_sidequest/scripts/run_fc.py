@@ -955,7 +955,7 @@ def _emerge_figure(cur, sess) -> None:
                 ax.set_ylabel(rlab, fontsize=ps.FS["label"])
         cb = fig.colorbar(im, cax=fig.add_subplot(gs[i, C]))
         cb.outline.set_visible(False); cb.ax.tick_params(length=0, labelsize=ps.FS["tick"])
-    fig.suptitle("How one person's map fills in as data accumulates",
+    fig.suptitle("One person's map (with and without the group pattern)",
                  fontsize=ps.FS["title"], fontweight="bold", color=ps.INK, y=0.99, va="top")
     fig.text(0.5, 0.89, f"{config.sub_id(s)} (subject with the most rest data)  |  "
              f"colour scale ±{vt:.2f} (top), ±{vb:.2f} (bottom)",
