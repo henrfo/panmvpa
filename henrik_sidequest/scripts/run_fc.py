@@ -957,7 +957,7 @@ def _emerge_figure(cur, sess) -> None:
         cb.outline.set_visible(False); cb.ax.tick_params(length=0, labelsize=ps.FS["tick"])
     fig.suptitle("How one person's map fills in as data accumulates",
                  fontsize=ps.FS["title"], fontweight="bold", color=ps.INK, y=0.99, va="top")
-    fig.text(0.5, 0.89, f"{config.sub_id(s)}, one subject out to 90 min (illustrative)  |  "
+    fig.text(0.5, 0.89, f"{config.sub_id(s)} (subject with the most rest data)  |  "
              f"colour scale ±{vt:.2f} (top), ±{vb:.2f} (bottom)",
              ha="center", va="top", fontsize=ps.FS["subtitle"], color=ps.SUBINK)
     print(f"figure -> {ps.save(fig, config.FC_RESULTS_DIR / 'emerge')}")
