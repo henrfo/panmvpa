@@ -47,6 +47,8 @@ SUNSET_DIV = LinearSegmentedColormap.from_list("sunset_div", [
     "#F5DCA8", "#E09040", "#CC5A20", "#9C2810",   # positive: light -> dark sunset (same as SUNSET)
 ])
 ACCENT = "#CC5A20"              # mid-orange, the single accent
+COOL = "#2C7A8C"               # teal complement (the palette's cool side) -- a secondary series
+                               # that must stand apart from the warm sunset curves
 GREY = "#999999"               # de-emphasised series
 
 INK, SUBINK, PANEL = "#111111", "#555555", "#222222"
