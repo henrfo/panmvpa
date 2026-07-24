@@ -608,7 +608,7 @@ def _analysis_figure(cur, n_sub) -> None:
     ps.apply()
     mins, full, hi, seg = _fig_range(cur, n_sub)
     rs, near = cur["r_self_mean"], cur["near_mean"]
-    c_self, c_near = ps.ACCENT, ps.SUNSET(0.35)
+    c_self, c_near = ps.SUNSET(0.30), ps.ACCENT   # darkest on the top (r_self) line
 
     fig, ax = ps.plt.subplots(figsize=(ps.HALF, 2.9))
     for sid in cur["subs"]:
