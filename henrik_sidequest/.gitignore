@@ -8,3 +8,10 @@ __pycache__/
 # ...but DO track the committed template atlases (small, ~3MB)
 !atlases/
 !atlases/**
+
+# Caterina Gratton's network maps — shared informally with the hackathon group, NOT ours to
+# redistribute. Never commit. (The extracted *.dlabel.nii already match the root *.nii rule;
+# this keeps the archive and the folder out explicitly.)
+final_networks.zip
+final_networks/
+results/fc/

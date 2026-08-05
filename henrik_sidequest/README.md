@@ -1,64 +1,304 @@
-# henrik_sidequest — PAN-MVPA plumbing
+# panmvpa — how much rest data does a personal brain map need?
 
-Data plumbing for the PAN precision-fMRI MVPA sidequest on
-[OpenNeuro ds006598 (PAN)](https://openneuro.org/datasets/ds006598/versions/1.0.0).
-This is infrastructure only — no GLM, no MVPA yet. The point is to `import panmvpa` in a
-notebook and start exploring.
+**Stable** = the map gives the same answer every time.
+**Useful** = the map identifies whose brain a scan came from.
 
-## Setup
+Data: [OpenNeuro ds006598 (PAN)](https://openneuro.org/datasets/ds006598/versions/1.0.0),
+10 subjects, preprocessed fMRIPrep BOLD in MNI152NLin6Asym 2mm. Volumetric throughout —
+no surface, no CIFTI, no FreeSurfer.
+
+## Building a personal map
+
+The Yeo-17 group atlas is a fixed spatial anchor: it is regridded once (nearest-neighbour)
+to the BOLD grid and collapsed to 17 network regions. Those regions never move — not
+across data levels, not across subjects. Then, from a subject's rest data:
+
+1. Average the timeseries within each of the 17 group regions → **17 reference signals**.
+2. Correlate every cortical voxel against all 17 references.
+3. Assign each voxel to its best match — winner-take-all. That's the personal map.
+
+What changes with more data is the *reference signals* (computed from more rest) and
+therefore the voxel assignments. What never changes is where the 17 group regions are.
+
+> The Yeo-17 taxonomy is realised via Schaefer-400, whose parcels carry the Yeo-Krienen
+> 17-network labels and which ships in FSL-MNI152 2mm — the same space family as the BOLD,
+> so it needs only a regrid rather than a cross-space resample.
+
+## Increasing the data — deterministic, no random seeds
+
+Each subject's rest runs are taken in order and split into four equal quarters. Eight maps
+are built:
+
+| maps | data each | purpose |
+|---|---|---|
+| Q1, Q2, Q3, Q4 | a quarter | stability at 1/4 (6 pairs) |
+| Q1+Q2, Q3+Q4 | a half | stability at 2/4 (1 pair) |
+| Q1+Q2+Q3 | three quarters | identification at 3/4 |
+| Q1+Q2+Q3+Q4 | everything | identification at 4/4 |
+
+## Plot 1 — stability
+
+Compare maps built from the **same amount of data**: mean pairwise Dice across the 17
+networks. Higher = lower estimation variance.
+
+Only 1/4 and 2/4 have two or more equal-sized maps, so **only those two levels have a
+point**. Three-quarter and full are single maps — there is nothing to compare them with.
+
+## Plot 2 — signal
+
+Use the **cumulative** map at each level (Q1, Q1+Q2, Q1+Q2+Q3, all). Score every held-out
+task scan against every subject's map by within-network homogeneity — the average
+correlation between voxels a map groups together, averaged over the 17 networks. The
+best-fitting map is the prediction; accuracy is the fraction correct. Chance = 1/10.
+
+Computed with the identity `sum of pairwise correlations = ||sum of rows||^2 / T - n`, so
+each network costs O(n·T) and no voxel-by-voxel correlation matrix is ever built.
+
+## Fixed vs varying
+
+| fixed at every level | varies with level |
+|---|---|
+| the 17 group regions (where they are) | the 17 reference signals |
+| the analysis domain (132,032 voxels) | the voxel assignments |
+| the held-out task scans | the resulting personal map |
+| the scoring method | |
+
+Held-out scans are **task runs only** — never used to build a map at any level — so the
+test set is identical across the whole x-axis. The scan list is a function of subject
+alone; it takes no level argument.
+
+## Leaner variant — parcel covariance (`scripts/run_fc.py`)
+
+Same two questions, the standard method for them: reduce each rest run to a **Schaefer-400
+parcel covariance** and ask (1) how fast it converges and (2) how much rest a linear SVM
+needs to tell the ten subjects apart. This is the ordinary FC-convergence + fingerprinting
+approach — not a reimplementation of anyone's parcellation procedure.
+
+**Reduce, then delete.** The download is 180 GB and the hub has 15, so the only real
+machinery is a loop that pulls one run, shrinks it, deletes it. Each run becomes three
+arrays (~300 KB vs 730 MB), computed with nilearn maskers:
+
+```
+parcels  (T, 400)  Schaefer-400 parcel means, RAW
+gs       (T,)      whole-brain mean signal (brain mask, NLin6Asym — our exact grid)
+dvars    (T,)      frame-to-frame RMS change — the motion-spike proxy
+```
+
+Raw on purpose: detrend / band-pass / global-signal regression are all linear and commute
+with parcel-averaging, so cleaning is a cheap analysis-time knob —
+`nilearn.signal.clean(parcels, confounds=gs, detrend, low_pass=0.08, high_pass=0.009,
+standardize="zscore_sample")`. Z-scoring is the one non-linear step, so it happens *after*
+averaging, never in the reduction. The dataset ships only preprocessed BOLD — no confounds,
+no motion parameters, no masks — so the global signal is the nuisance lever we have.
+
+**The main result — nearest-neighbour identification vs data (minutes of rest, linear):**
+
+A raw within-person convergence curve is meaningless alone, because the scale isn't 0–1.
+Two halves of *one* person's rest already agree ~0.9; two *different* people ~0.6 — most of a
+connectivity table is just "this is a human cortex," and the between-person floor itself
+**rises with data**. So everything grows on one ladder from the identical A-side estimate,
+changing only the reference. For subject A at *X* minutes, correlate A's growing-half FC
+against every subject's full reference half:
+
+- **r_self(X)** — vs A's own reference (the convergence / reliability curve).
+- **nearest(X)** — the **max** over other subjects: the nearest impostor, the identification
+  competitor. **floor(X)** — the **mean** over others: the group floor (same cross-
+  correlations, one loop).
+- **signal(X) = r_self − nearest** — the individual signal, formed per subject then averaged
+  and reported **directly** (not as headroom = signal/(1−nearest); that denominator moves, so
+  headroom can rise while the signal itself falls). Unlike SVM accuracy it has **no ceiling**,
+  and needing no held-out examples it runs the full ladder to 80 min.
+- **hit rate** — was r_self the top match of all subjects? Reported, but it ceilings like the
+  SVM, so it isn't the headline.
+
+**The main analysis — reliability of the group residual.** r_self is dominated by shared "this
+is a human cortex" structure (two strangers agree ~0.6, and r_self/floor is a near-constant
+~1.5 across the ladder — the group and individual components are estimated in fixed proportion,
+so that ratio is a scaling constant, not differential accrual). Precision fMRI cares about the
+deviation from the group, so residualise **both** sides against it before correlating:
+
+- **g1** = leave-one-out mean of the *other* subjects' full **first** halves; **g2** = the same
+  from their **second** halves. Different g per side (independent estimation error), so g's noise
+  is not shared across the two sides and cannot inflate r.
+- **r_resid_sub(X)** = `corr(A(X) − g1, ref(s) − g2)` — plain subtraction; leaves global
+  amplitude in (uniformly stronger connectivity reads as individuality).
+- **r_resid_reg(X)** = same with the projection onto g **regressed out** — removes global
+  scaling. If the two variants differ a lot, some "individuality" is global amplitude.
+
+Both variants are per subject per rung in `curves.csv` and per network block in `networks.csv`
+(the raw per-network ranking is confounded by how much group structure each block carries; on
+residuals it is a cleaner question). This is a different question from the sampling check below.
+
+The n<10 tail (at 80 min, a single subject with the most rest) is **de-emphasised** in the
+figure — bold only over the full-cohort rungs, the sparse tail greyed — so the highest point
+on the chart isn't one person.
+
+- **SVM (second method, `--svm`)** — one example = *X* minutes labelled by subject; grow *X*,
+  retrain, record the **margin**. Held out by **whole session**, never random minutes; examples
+  session-disjoint. An example eats *X* minutes, so it stops past ~40 min when each subject has
+  one example to hold out. A **connectivity-free control** (per-parcel temporal mean/SD) is
+  scored alongside it. It is the only slow part (20+ min), so it is **off by default** — pass
+  `--svm` to run it; the curves, CSVs and network breakdown finish in seconds without it.
+
+**`analyze` prints numbers and writes files — no prose conclusions** (a conclusion in prose
+survives changes to the metric it came from; a CSV doesn't). It prints the subject-mean table
+(r_self / nearest / floor / signal / hit%) and the SVM table, and writes:
+
+- `curves.csv` — long format, one row per (subject, minutes): `subject, minutes, n, r_self,
+  nearest, floor, signal, r_resid_sub, r_resid_reg`. The **per-subject** curves behind the
+  means; any summary (90% minutes, crossover, spreads) is computed from this in a notebook.
+- `networks.csv` — long format per network block: `network_a, network_b, minutes, r_self,
+  nearest, signal, r_resid_sub, r_resid_reg` (subject-mean per Yeo-17 pair, every rung).
+- `headline.csv` — the two headline numbers at the last full-cohort rung (45 min):
+  `metric, minutes, mean, ci_lo, ci_hi` for `r_self` and `r_resid_reg`, with a subject-level
+  bootstrap 95% CI (1000 seeded draws, subjects resampled with replacement — not timepoints).
+- `residual.png` — **the main figure**: r_self vs the group residual, each mean with a shaded
+  **95% bootstrap CI**, and the same two curves **without global-signal regression** drawn thin
+  (teal) behind as a robustness overlay. x capped at n=10.
+- `emerge.png` — the residual result shown as **maps, not a curve**: one subject (the median by
+  residual, named), a 2×4 grid of correlation matrices, parcels sorted by Yeo-17 network with
+  block boundaries. Top row = the whole map from the first 1 / 5 / 20 / 45 min; bottom row = the
+  same with the leave-one-out group pattern subtracted. The whole map settles by ~5 min; the
+  individual part stays noisy at 45 — the finding, shown directly. Two colour scales, one per
+  row (a shared scale saturates the residual), each stated.
+- `curves.png` — one panel: r_self and the nearest impostor, each mean with a shaded 95%
+  bootstrap CI; the gap between them is the individual signal. x capped at n=10 (45 min).
+- `sampling.png` / `sampling.csv` — three ways of drawing the X minutes (r_self; seeded):
+  **first** (the opening X min — what you can actually collect), **scatter** (X individual
+  timepoints across the half), **block** (X min as ~1-min contiguous chunks from random
+  positions). This separates two confounds: scatter breaks temporal autocorrelation, so under
+  the 0.08 Hz low-pass each TR is ~independent and effective DOF is inflated; block has the same
+  session spread but preserves autocorrelation. If the scatter gap **collapses onto block**, it
+  was DOF; if **block stays well above first**, it is session diversity. (first vs block is the
+  session question; first vs scatter mixes sessions with DOF and shouldn't be read alone.) A
+  separate question from the residual analysis above.
+- `networks.png` — the mean reference FC with the 400 parcels **sorted by Yeo-17 network**
+  (blocks line up with named systems) beside the 17×17 group-residual-per-block matrix at the
+  last full-cohort rung.
+- `nettraj.png` — group-residual reliability per Yeo-17 network vs data, all 17 coloured by
+  rank (dark = high). **Two panels**: (a) mean over every block the network touches, (b) its
+  within-network block only. Colours are fixed by panel (a)'s ranking and shared, so if panel
+  (b)'s gradient stays ordered top-to-bottom the two rankings agree (robustness); if it
+  scrambles, they differ (a result).
+
+Outputs are sorted by type under `results/fc/<version>/`: **`csv/`**, **`pdf/`** (paper), and
+**`png/`** (viewing). Every figure is written as both PDF and PNG and follows one shared style —
+serif, the `sunset` palette, no default colormaps — defined once in
+[panmvpa/plotstyle.py](panmvpa/plotstyle.py) per [docs/plot_style.md](docs/plot_style.md), not
+per-figure.
 
 ```bash
-uv venv --python 3.11 .venv && source .venv/bin/activate
-uv pip install numpy scipy pandas nibabel nilearn scikit-learn matplotlib
+python scripts/run_fc.py inspect --subjects PAN01           # reduce ONE run, look, delete nothing
+python scripts/run_fc.py reduce  --subjects PAN01 --cleanup # reduce all rest, then drop the BOLD
+python scripts/run_fc.py analyze                            # tables + CSVs + figures (seconds)
+python scripts/run_fc.py analyze --svm                      # also the leave-one-session-out SVM (20+ min)
 ```
 
-## Use
+`inspect` first: deletion is the only irreversible step, and `--cleanup` skips any run whose
+sanity check fails. The brain mask auto-downloads from templateflow on first run. nilearn's
+per-run deprecation notices (confound standardization, masker resampling — harmless) are
+silenced in-code, scoped to each nilearn call and class-agnostic, so the tables stay
+readable without a stderr redirect.
 
-```python
-import panmvpa
-
-panmvpa.epiproj_sessions("PAN01")      # -> [1, 2, 4, 5, 6, 7]  (only real epiproj sessions)
-ev = panmvpa.build_events("PAN01", 1)  # onset / duration(=10s) / trial_type
-img = panmvpa.load_bold("PAN01", 1)    # nibabel image, MNI152NLin6Asym 2mm
-```
-
-## Package layout
-
-- `panmvpa/config.py` — paths, `SUBJECTS`, `TASK`, `TR`, `CONDITIONS`, durations, path helpers
-- `panmvpa/events.py` — `parse_1d_file`, `build_events`, `epiproj_sessions`
-- `panmvpa/bold.py` — `find_bold`, `load_bold`, `is_fetched`
-- `panmvpa/atlases.py` — download Schaefer-400/Yeo-17 into `atlases/`
-- `fetch_data.py` — `datalad get` only the epiproj slice for a subject
-- `verify.py` — smoke test (events table + BOLD shape + atlases)
-- `atlases/` — template parcellations, committed (~3 MB)
-
-## Getting the data
-
-Full dataset is ~636 GB; one epiproj BOLD run is ~1.3 GB. Clone metadata, fetch per step.
+**On the hub — prove it on one subject before looping over ten.** `--cleanup` deletes BOLD;
+do not point it at all ten until PAN01 has gone through inspect → reduce and you have
+confirmed the `.npz` files landed and the curve looks sane.
 
 ```bash
-datalad clone https://github.com/OpenNeuroDatasets/ds006598.git data/ds006598
-python fetch_data.py --subject PAN01     # datalad get epiproj BOLD + timing only
-python verify.py --subject PAN01
+export DATA_DIR=$HOME/data/ds006598
+F=henrik_sidequest/scripts/fetch_hub.py
+R=henrik_sidequest/scripts/run_fc.py
+
+# 1. One subject, end to end. STOP and look before trusting --cleanup on the cohort.
+python $F --dest $DATA_DIR --subjects PAN01 --kind rest
+python $R inspect --subjects PAN01                    # eyeball the diagnostic PNG
+python $R reduce  --subjects PAN01 --cleanup
+ls henrik_sidequest/derivatives/reduced/v1/           # confirm the .npz landed
+python $R analyze                                     # one subject -> within only; curve sane?
 ```
 
-`datalad get` needs the `git-annex-remote-openneuro` helper on PATH. Set `PANMVPA_DATA`
-if your clone lives elsewhere (defaults to `henrik_sidequest/data/ds006598`).
+```bash
+# 2. Only once that looks right: the cohort. `set -e` stops at the first failure so an empty
+#    DATA_DIR can't charge through all ten repeating the same error. Re-running is safe --
+#    an already-reduced run is skipped, not rebuilt.
+set -e
+for S in PAN01 PAN02 PAN03 PAN04 PAN05 PAN06 PAN07 PAN08 PAN09 PAN10; do
+  python $F --dest $DATA_DIR --subjects $S --kind rest
+  python $R reduce --subjects $S --cleanup
+done
+python $R analyze
+```
 
-## Verified dataset facts (S3 + paper STAR Methods, 2026-07-20)
+## Layout
 
-- 10 subjects `PAN01`..`PAN10`; **~6 epiproj runs per subject**, spread across sessions
-  (e.g. PAN01 → sessions 1,2,4,5,6,7). Never assume a session has epiproj — discover it.
-- Preproc BOLD lives in the subject/session func folders (not a separate derivatives tree):
-  `sub-PAN{XX}/ses-{N}/func/*_space-MNI152NLin6Asym_res-2_desc-preproc_bold.nii.gz`
-- **TR = 1.355 s**, slice-timing NOT corrected, skull-stripped.
-- epiproj block = 20 s (5 s fix + **10 s trial** + 5 s fix). We model the 10 s trial.
-- Conditions: `pastself, presentself, futureself, pastnonself, presentnonself, futurenonself`.
-- AFNI `.1D`: one row of onset times (s); `*` = empty run. **No durations in the file.**
-- **No fMRIPrep confounds .tsv are deposited.**
+```
+panmvpa/config.py        paths, subjects, the quarter/level design
+panmvpa/rest.py          find scans, split into quarters, load timeseries
+panmvpa/parcellation.py  WTA map building, saving, map-to-map Dice
+panmvpa/identify.py      homogeneity scoring and subject identification
+panmvpa/figure.py        the two-panel plot + CSV
+panmvpa/cli.py           stage runner (WTA maps)
+scripts/fetch_hub.py     S3 streaming download, one subject at a time
+scripts/run_all.py       entry point (WTA maps)
+scripts/run_fc.py        the leaner parcel-covariance variant (reduce / inspect / analyze)
+```
 
-## Notes for the analysis phase (not done here)
+## Running it
 
-- Yeo-2011 atlas ships in FreeSurferConformed **1 mm** space — resample to the BOLD grid
-  (MNI152NLin6Asym 2 mm) before masking. Schaefer ships in FSL MNI152 2 mm.
-- Contrasts of interest: retrospection (past vs present self), prospection (future vs present).
+```bash
+pip install -e .                 # from the repo root
+export DATA_DIR=$HOME/data/ds006598
+```
+
+Two passes, because scoring needs *every* subject's map — a single
+download-process-delete pass would destroy early subjects' scans before later maps exist.
+
+```bash
+F=henrik_sidequest/scripts/fetch_hub.py
+
+# Pass 1 — rest only: build maps, measure stability, drop the rest data.
+for S in PAN01 PAN02 PAN03 PAN04 PAN05 PAN06 PAN07 PAN08 PAN09 PAN10; do
+  python $F --dest $DATA_DIR --subjects $S --kind rest
+  panmvpa-run --stage maps --subjects $S --cleanup
+done
+
+# Pass 2 — held-out task scans, scored against all 10 subjects' maps.
+for S in PAN01 PAN02 PAN03 PAN04 PAN05 PAN06 PAN07 PAN08 PAN09 PAN10; do
+  python $F --dest $DATA_DIR --subjects $S --kind task
+  panmvpa-run --stage identify --subjects $S --cleanup
+done
+
+panmvpa-run --stage figure
+```
+
+Maps (~260 KB each) and the JSON/CSV results persist; raw BOLD streams through. Disk holds
+about one subject at a time. Both stages resume — existing maps are not rebuilt and the
+results files accumulate.
+
+`--cleanup` **permanently deletes** the raw BOLD it has finished with. Everything is
+re-downloadable from OpenNeuro. It handles both a git-annex clone (`annex drop`) and a
+plain download (unlink).
+
+### JupyterHub notes
+
+- 15 GB RAM: subjects are processed one at a time and caches are dropped between them.
+- `export TMPDIR=$HOME/tmp` — the overlay filesystem is small.
+- Enable the keepalive plugin (`cmd-shift-C`, search "keep", 24 h) for long runs.
+
+## Grid cache (run this if `compare` says "No BOLD on disk")
+
+`compare`, `identify` and `figure` only read `.npy` maps, but the voxel grid used to be
+derived from a BOLD header — so after `--cleanup` deleted the scans they crashed. The
+grid is now cached:
+
+```bash
+python henrik_sidequest/scripts/build_grid_cache.py --verify-against-maps
+```
+
+This rebuilds the analysis domain and group map **from the atlas alone**, writing
+`derivatives/domain.npy` and `derivatives/group_map.npy`. `--verify-against-maps` checks
+the rebuilt domain size against the maps already on disk before you rely on it.
+
+The `maps` stage writes this cache automatically on first run, so a fresh pipeline never
+hits the problem. The geometry is hardcoded (MNI152NLin6Asym 2mm, 91×109×91) and was
+verified byte-for-byte identical to the BOLD-derived domain.

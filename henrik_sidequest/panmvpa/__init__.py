@@ -1,31 +1,43 @@
-"""panmvpa — plumbing for the PAN precision-fMRI MVPA sidequest.
+"""panmvpa — how much rest data does a personal brain map need?
+
+Stable = equal-sized maps agree with each other. Useful = the map identifies whose brain
+a held-out scan came from.
 
     import panmvpa
-    sessions = panmvpa.epiproj_sessions("PAN01")
-    events = panmvpa.build_events("PAN01", sessions[0])
-    img = panmvpa.load_bold("PAN01", sessions[0])
+    panmvpa.build_map("PAN01", (0, 1))      # map from the first half of the rest data
+    panmvpa.map_dice(map_a, map_b)          # agreement between two maps
 """
 from __future__ import annotations
 
-from . import atlases, bold, config, events
-from .bold import find_bold, is_fetched, load_bold
-from .config import CONDITIONS, CONTRASTS, SUBJECTS, TASK, TR
-from .events import build_events, epiproj_sessions, parse_1d_file
+from . import config, figure, identify, parcellation, rest
+from .config import LEVELS, SUBJECTS
+from .identify import identify as identify_scan
+from .identify import network_homogeneity
+from .parcellation import (
+    build_map,
+    dice_per_network,
+    load_map,
+    map_dice,
+    save_map,
+)
+from .rest import chunk_bounds, rest_runs, task_scans
 
 __all__ = [
     "config",
-    "events",
-    "bold",
-    "atlases",
+    "rest",
+    "parcellation",
+    "identify",
+    "figure",
     "SUBJECTS",
-    "TASK",
-    "TR",
-    "CONDITIONS",
-    "CONTRASTS",
-    "parse_1d_file",
-    "build_events",
-    "epiproj_sessions",
-    "find_bold",
-    "load_bold",
-    "is_fetched",
+    "LEVELS",
+    "rest_runs",
+    "task_scans",
+    "chunk_bounds",
+    "build_map",
+    "save_map",
+    "load_map",
+    "map_dice",
+    "dice_per_network",
+    "network_homogeneity",
+    "identify_scan",
 ]
